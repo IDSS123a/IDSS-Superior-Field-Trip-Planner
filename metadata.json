@@ -1,0 +1,7 @@
+{
+  "name": "IDSS Excursion Planner",
+  "description": "Advanced location finder and route calculator using GeoNames and OpenRouteService.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
