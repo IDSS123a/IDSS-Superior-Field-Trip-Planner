@@ -553,6 +553,7 @@ function computeReliability(sources: any[]) {
 }
 
 export async function buildThreePlans(formData: TripFormState, forceTemplates = false): Promise<PlannerResult> {
+  // 1. Validate
   const dep = parseDateNormalized(formData.dep_date);
   const ret = parseDateNormalized(formData.ret_date);
   if (!dep || !ret) throw new Error("Invalid dates.");
@@ -560,6 +561,7 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
   const days = daysInclusive(dep, ret);
   if (formData.trip_type.toLowerCase().includes('multi') && days < 2) throw new Error("Multi-day trip must be at least 2 days.");
 
+  // 2. Geocode Origin
   let originGeo: GeoLocation | null = null;
   if (formData.origin && formData.origin.trim() !== '') {
     originGeo = await geocodeGeoNames(formData.origin) || await geocodeORS(formData.origin);
@@ -568,12 +570,14 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
     originGeo = { lat: IDSS_COORDS.lat, lng: IDSS_COORDS.lng, name: 'IDSS Sarajevo', source: 'default', url: null };
   }
 
+  // 3. Candidates (Destinations)
   let complexRouteCandidate: { stops: GeoLocation[] } | null = null;
   let candidates: { city: string; country?: string; lat?: number; lng?: number }[] = [];
 
   const validDestinations = formData.destinations.filter(d => d.trim().length > 0);
 
   if (validDestinations.length > 0) {
+    // Specific Route mode
     const resolvedStops: GeoLocation[] = [];
     for (const dest of validDestinations) {
         const ge = await geocodeGeoNames(dest) || await geocodeORS(dest);
