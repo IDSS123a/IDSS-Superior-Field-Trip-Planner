@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import MapView from './components/MapView';
 import { buildThreePlans, parseDateNormalized } from './services/locationService';
 import { TripFormState, PlannerResult, TripPlan } from './types';
@@ -8,15 +8,15 @@ declare const html2pdf: any;
 function App() {
   const [form, setForm] = useState<TripFormState>({
     origin: '',
-    destinations: [''], // Start with one empty destination slot
+    destinations: [''], 
     scope: 'regional',
     trip_type: 'Multi-day excursion',
     grade_level: '9',
     num_students: 14,
     teachers: 'Anes Memić, Victoria Bartz',
     transport_pref: 'bus',
-    dep_date: '21.09.2025',
-    ret_date: '25.09.2025',
+    dep_date: '2025-09-21', 
+    ret_date: '2025-09-25', 
     budget: '',
     focus: 'kulturno nasljeđe, obrazovanje, zabava',
     notes: ''
@@ -28,8 +28,9 @@ function App() {
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [result, setResult] = useState<PlannerResult | null>(null);
   const [focusedPlan, setFocusedPlan] = useState<number | null>(null);
+  const [focusedLocation, setFocusedLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Generic handler for simple fields
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setForm(prev => ({ ...prev, [name]: value }));
@@ -42,17 +43,13 @@ function App() {
     }
   };
 
-  // Specific handler for destinations array
   const handleDestinationChange = (index: number, value: string) => {
     const newDestinations = [...form.destinations];
     newDestinations[index] = value;
     setForm(prev => ({ ...prev, destinations: newDestinations }));
-    
-    // Auto-switch scope to 'specific' if user types something
     if (value.trim() !== '' && form.scope === 'regional') {
         setForm(prev => ({ ...prev, scope: 'specific', destinations: newDestinations }));
     }
-    
     if (validationErrors.destinations) {
         setValidationErrors(prev => { const e = {...prev}; delete e.destinations; return e; });
     }
@@ -64,7 +61,6 @@ function App() {
 
   const removeDestination = (index: number) => {
     if (form.destinations.length === 1) {
-        // If only one, just clear it
         handleDestinationChange(0, '');
         return;
     }
@@ -74,27 +70,20 @@ function App() {
 
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
-    
-    // 1. Destination logic
     const hasValidDest = form.destinations.some(d => d.trim().length > 0);
     if (form.scope === 'specific' && !hasValidDest) {
       errors.destinations = 'At least one destination is required for "Specific destination" scope.';
     }
-
-    // 2. Required text fields
     if (!form.grade_level.trim()) errors.grade_level = 'Grade level is required.';
     if (!form.teachers.trim()) errors.teachers = 'Accompanying teachers are required.';
     if (!form.focus.trim()) errors.focus = 'Educational focus is required.';
-
-    // 3. Numbers
     if (form.num_students < 1) errors.num_students = 'Number of students must be at least 1.';
 
-    // 4. Dates
     const d1 = parseDateNormalized(form.dep_date);
     const d2 = parseDateNormalized(form.ret_date);
 
-    if (!d1) errors.dep_date = 'Invalid date format (DD.MM.YYYY).';
-    if (!d2) errors.ret_date = 'Invalid date format (DD.MM.YYYY).';
+    if (!d1) errors.dep_date = 'Invalid date.';
+    if (!d2) errors.ret_date = 'Invalid date.';
 
     if (d1 && d2) {
       const today = new Date();
@@ -107,7 +96,6 @@ function App() {
       } else {
         const diffTime = Math.abs(d2.getTime() - d1.getTime());
         const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
-
         if (form.trip_type === 'Multi-day excursion' && diffDays < 2) {
           errors.ret_date = 'Multi-day excursion requires at least 2 days.';
         }
@@ -126,11 +114,10 @@ function App() {
       setError("Please fix the validation errors highlighted below.");
       return;
     }
-
     setLoading(true);
     setError(null);
     setFocusedPlan(null);
-    
+    setFocusedLocation(null);
     try {
       const res = await buildThreePlans(form, forceTemplates);
       setResult(res);
@@ -152,35 +139,78 @@ function App() {
       }
       savedPlans.push(plan);
       localStorage.setItem('idss_saved_plans', JSON.stringify(savedPlans));
-      alert("Plan saved successfully!");
+      alert("Plan saved to Browser Storage!");
     } catch (e) {
       console.error("Error saving plan:", e);
       alert("Failed to save plan. Storage might be full.");
     }
   };
 
+  const handleExportJson = (plan: TripPlan) => {
+    const dataStr = JSON.stringify(plan, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `IDSS_Plan_${plan.destination.replace(/\s+/g, '_')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleLoadSavedPlans = () => {
     try {
       const savedStr = localStorage.getItem('idss_saved_plans');
       if (!savedStr) {
-        alert("No saved plans found.");
+        alert("No plans found in Browser Storage.");
         return;
       }
       const savedPlans: TripPlan[] = JSON.parse(savedStr);
       if (savedPlans.length === 0) {
-        alert("No saved plans found.");
+        alert("No plans found in Browser Storage.");
         return;
       }
-      setResult({
-        origin: null, 
-        plans: savedPlans
-      });
+      setResult({ origin: null, plans: savedPlans });
       setFocusedPlan(null);
+      setFocusedLocation(null);
       setError(null);
     } catch (e) {
       console.error("Error loading plans:", e);
       setError("Failed to load saved plans.");
     }
+  };
+
+  const handleFileLoadClick = () => {
+    if (fileInputRef.current) {
+        fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const content = e.target?.result as string;
+            const plan = JSON.parse(content);
+            // Basic validation
+            if (!plan.itinerary || !plan.cost_breakdown) {
+                throw new Error("Invalid plan file format");
+            }
+            setResult({ origin: null, plans: [plan] });
+            setFocusedPlan(null);
+            setError(null);
+            alert("Plan loaded from file successfully!");
+        } catch (err) {
+            console.error("Error parsing file", err);
+            alert("Failed to load plan. Invalid file format.");
+        }
+    };
+    reader.readAsText(file);
+    // Reset input
+    event.target.value = '';
   };
 
   const handleExportPDF = () => {
@@ -212,11 +242,17 @@ function App() {
     }, 400);
   }, []);
 
+  const handleShowPoiOnMap = useCallback((lat: number, lng: number) => {
+    setFocusedLocation({ lat, lng });
+    const element = document.getElementById('leaflet-map-container');
+    if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-white p-4 md:p-8 font-sans" id="export-container">
       <div className="max-w-6xl mx-auto">
-        
-        {/* Header */}
         <div className="flex items-center gap-4 mb-8 border-b pb-6 border-slate-100">
           <img src="https://i.postimg.cc/zGfMdQfF/IDSS_Logo.png" alt="IDSS Logo" className="w-16 h-16 object-contain" />
           <div>
@@ -225,13 +261,12 @@ function App() {
           </div>
         </div>
 
-        {/* Input Section */}
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 mb-8 shadow-sm no-print">
           <h3 className="text-lg font-bold mb-4 text-slate-800">1. Unesite podatke za planiranje ekskurzije</h3>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <InputGroup label="Polazna tačka" sub="(ostavi prazno za IDSS)" error={validationErrors.origin}>
-              <input name="origin" value={form.origin} onChange={handleChange} placeholder="npr. Sarajevo" className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+              <input name="origin" value={form.origin} onChange={handleChange} placeholder="npr. Sarajevo" className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Starting Point" />
             </InputGroup>
 
             <div className="md:col-span-2">
@@ -246,9 +281,10 @@ function App() {
                       onChange={(e) => handleDestinationChange(index, e.target.value)} 
                       placeholder={`Stop ${index + 1} (npr. ${index === 0 ? 'Zagreb' : index === 1 ? 'Trieste' : 'Roma'})`} 
                       className={`w-full p-2.5 rounded-lg border text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none ${validationErrors.destinations ? 'border-red-500' : 'border-slate-300'}`} 
+                      aria-label={`Destination Stop ${index + 1}`}
                     />
                     {form.destinations.length > 1 && (
-                      <button onClick={() => removeDestination(index)} className="px-3 text-slate-400 hover:text-red-500 border border-slate-200 rounded-lg bg-slate-50 font-bold">×</button>
+                      <button onClick={() => removeDestination(index)} className="px-3 text-slate-400 hover:text-red-500 border border-slate-200 rounded-lg bg-slate-50 font-bold" aria-label="Remove stop">×</button>
                     )}
                   </div>
                 ))}
@@ -258,33 +294,33 @@ function App() {
             </div>
 
             <InputGroup label="Opseg pretrage" error={validationErrors.scope}>
-              <select name="scope" value={form.scope} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none">
+              <select name="scope" value={form.scope} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Search Scope">
                 <option value="specific">Specific Route (Your Inputs)</option>
                 <option value="regional">Suggest Destinations (Ignore inputs)</option>
               </select>
             </InputGroup>
 
             <InputGroup label="Tip ekskurzije" error={validationErrors.trip_type}>
-              <select name="trip_type" value={form.trip_type} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none">
+              <select name="trip_type" value={form.trip_type} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Trip Type">
                 <option>One-day excursion</option>
                 <option>Multi-day excursion</option>
               </select>
             </InputGroup>
 
             <InputGroup label="Razred" error={validationErrors.grade_level}>
-              <input name="grade_level" value={form.grade_level} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+              <input name="grade_level" value={form.grade_level} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Grade Level" />
             </InputGroup>
 
             <InputGroup label="Broj učenika" error={validationErrors.num_students}>
-              <input type="number" name="num_students" value={form.num_students} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+              <input type="number" name="num_students" value={form.num_students} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Number of Students" />
             </InputGroup>
 
             <InputGroup label="Pratitelji (imena)" error={validationErrors.teachers}>
-              <input name="teachers" value={form.teachers} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+              <input name="teachers" value={form.teachers} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Accompanying Teachers" />
             </InputGroup>
 
             <InputGroup label="Prevoz" error={validationErrors.transport_pref}>
-              <select name="transport_pref" value={form.transport_pref} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none">
+              <select name="transport_pref" value={form.transport_pref} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Transport Preference">
                 <option value="bus">Bus</option>
                 <option value="plane">Plane</option>
                 <option value="train">Train</option>
@@ -294,33 +330,41 @@ function App() {
               </select>
             </InputGroup>
 
-            <InputGroup label="Datum polaska (DD.MM.YYYY)" error={validationErrors.dep_date}>
-              <input name="dep_date" value={form.dep_date} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+            <InputGroup label="Datum polaska" error={validationErrors.dep_date}>
+              <input type="date" name="dep_date" value={form.dep_date} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Departure Date" />
             </InputGroup>
 
-            <InputGroup label="Datum povratka (DD.MM.YYYY)" error={validationErrors.ret_date}>
-              <input name="ret_date" value={form.ret_date} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+            <InputGroup label="Datum povratka" error={validationErrors.ret_date}>
+              <input type="date" name="ret_date" value={form.ret_date} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Return Date" />
             </InputGroup>
 
             <InputGroup label="Budžet (opcionalno)" error={validationErrors.budget}>
-              <input name="budget" value={form.budget} onChange={handleChange} placeholder="npr. 500 EUR" className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+              <input name="budget" value={form.budget} onChange={handleChange} placeholder="npr. 500 EUR" className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Budget" />
             </InputGroup>
 
             <div className="md:col-span-3">
                <InputGroup label="Obrazovni fokus" error={validationErrors.focus}>
-                 <input name="focus" value={form.focus} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+                 <input name="focus" value={form.focus} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" aria-label="Educational Focus" />
                </InputGroup>
             </div>
 
             <div className="md:col-span-3">
-               <InputGroup label="Napomene" error={validationErrors.notes}>
-                 <textarea name="notes" value={form.notes} onChange={handleChange} rows={2} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
+               <InputGroup label="Trip Notes (Allergies, Special Needs)" error={validationErrors.notes}>
+                 <textarea 
+                    name="notes" 
+                    value={form.notes} 
+                    onChange={handleChange} 
+                    rows={2} 
+                    className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" 
+                    placeholder="E.g., Two students with peanut allergies, one wheelchair user..."
+                    aria-label="Trip Notes"
+                 />
                </InputGroup>
             </div>
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm flex items-center gap-2">
+            <div role="alert" className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
               </svg>
@@ -340,15 +384,27 @@ function App() {
               {loading ? 'Processing...' : 'Generate Templates (Offline)'}
             </Button>
             <Button onClick={handleLoadSavedPlans} disabled={loading}>
-              Load Saved Plans
+              Load Browser Saves
             </Button>
+            
+            {/* Hidden Input for File Loading */}
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              style={{display: 'none'}} 
+              onChange={handleFileChange} 
+              accept=".json"
+            />
+            <Button onClick={handleFileLoadClick} disabled={loading}>
+              Load from File
+            </Button>
+
             <Button onClick={() => window.print()}>Print</Button>
             <Button onClick={handleExportPDF}>Download PDF</Button>
           </div>
           <p className="mt-3 text-xs text-slate-400">Napomena: aplikacija koristi GeoNames (geokodiranje), Wikidata (POI) i OpenRouteService (rute/POI).</p>
         </div>
 
-        {/* Map Section */}
         <div className="mb-8 shadow-lg rounded-xl overflow-hidden border border-slate-200 relative">
            <MapView 
             origin={result?.origin || null} 
@@ -356,18 +412,22 @@ function App() {
             focusedPlanIndex={focusedPlan}
             onPlanSelect={handleMapPlanSelect}
             isLoading={loading}
+            focusedLocation={focusedLocation}
           />
-          {focusedPlan !== null && (
+          {(focusedPlan !== null || focusedLocation !== null) && (
             <button 
-              onClick={() => setFocusedPlan(null)}
+              onClick={() => {
+                  setFocusedPlan(null);
+                  setFocusedLocation(null);
+              }}
               className="absolute top-4 right-4 bg-white text-slate-700 px-3 py-1.5 rounded-lg shadow-md text-sm font-bold z-[1000] hover:bg-slate-50 border border-slate-200"
+              aria-label="Reset Map View"
             >
               Reset View
             </button>
           )}
         </div>
 
-        {/* Results Section */}
         {result && (
           <div className="grid gap-6">
             {result.plans.map((plan, idx) => (
@@ -380,6 +440,8 @@ function App() {
                 isFocused={focusedPlan === idx}
                 isLoading={mapLoadingId === idx}
                 onSave={handleSavePlan}
+                onExport={handleExportJson}
+                onShowPoi={handleShowPoiOnMap}
               />
             ))}
           </div>
@@ -399,8 +461,6 @@ function App() {
     </div>
   );
 }
-
-// Sub-components for cleaner App.tsx
 
 const Spinner = () => (
   <svg className="animate-spin h-4 w-4 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -425,7 +485,7 @@ const InputGroup = ({ label, sub, error, children }: { label: string, sub?: stri
         return child;
       })}
     </div>
-    {error && <p className="text-red-500 text-[10px] mt-1 font-semibold">{error}</p>}
+    {error && <p className="text-red-500 text-[10px] mt-1 font-semibold" role="alert">{error}</p>}
   </div>
 );
 
@@ -433,7 +493,7 @@ const Button = ({ children, primary, disabled, onClick }: { children: React.Reac
   <button
     onClick={onClick}
     disabled={disabled}
-    className={`px-4 py-2.5 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2
+    className={`px-4 py-2.5 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 focus:outline-none
       ${disabled ? 'opacity-70 cursor-not-allowed' : 'hover:scale-[1.02] active:scale-[0.98]'}
       ${primary 
         ? 'bg-blue-600 text-white shadow-md hover:bg-blue-700' 
@@ -444,7 +504,17 @@ const Button = ({ children, primary, disabled, onClick }: { children: React.Reac
   </button>
 );
 
-const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave }: { plan: TripPlan, index: number, onFocus: () => void, isFocused: boolean, id?: string, isLoading?: boolean, onSave: (plan: TripPlan) => void }) => (
+const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave, onExport, onShowPoi }: { 
+    plan: TripPlan, 
+    index: number, 
+    onFocus: () => void, 
+    isFocused: boolean, 
+    id?: string, 
+    isLoading?: boolean, 
+    onSave: (plan: TripPlan) => void,
+    onExport: (plan: TripPlan) => void,
+    onShowPoi: (lat: number, lng: number) => void
+}) => (
   <div 
     id={id} 
     className={`bg-white rounded-xl border-l-4 shadow-sm p-5 break-inside-avoid transition-all 
@@ -461,18 +531,27 @@ const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave }: { 
       <div className="flex items-center gap-2">
         <button 
           onClick={() => onSave(plan)}
-          className="text-xs px-3 py-1.5 rounded-md font-bold transition-colors bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border border-emerald-200"
+          className="text-xs px-3 py-1.5 rounded-md font-bold transition-colors bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border border-emerald-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          aria-label="Save plan to browser"
         >
           Save
         </button>
         <button 
+          onClick={() => onExport(plan)}
+          className="text-xs px-3 py-1.5 rounded-md font-bold transition-colors bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-500"
+          aria-label="Export plan to file"
+        >
+          Export
+        </button>
+        <button 
           onClick={onFocus} 
           disabled={isLoading}
-          className={`text-xs px-3 py-1.5 rounded-md font-bold transition-colors flex items-center gap-1
+          className={`text-xs px-3 py-1.5 rounded-md font-bold transition-colors flex items-center gap-1 focus:outline-none focus:ring-2 focus:ring-blue-500
             ${isFocused 
               ? 'bg-blue-600 text-white' 
               : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
+          aria-label={isFocused ? "Currently viewing on map" : "Zoom to map"}
         >
           {isLoading && <Spinner />}
           {isLoading ? 'Zooming...' : (isFocused ? 'Viewing Map' : 'Zoom to Map')}
@@ -497,6 +576,26 @@ const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave }: { 
             {plan.itinerary.map(d => (
               <li key={d.day}>
                 <span className="font-semibold text-slate-800">Day {d.day}:</span> {d.activity}
+                {d.poi_name && (
+                  <button 
+                    onClick={() => {
+                        const source = plan.sources.find(s => 
+                            s.title.toLowerCase().includes(d.poi_name!.toLowerCase()) || 
+                            d.poi_name!.toLowerCase().includes(s.title.toLowerCase())
+                        );
+                        if (source && source.lat && source.lng) {
+                            onShowPoi(source.lat, source.lng);
+                        } else {
+                            alert("Coordinates for this specific location are not available.");
+                        }
+                    }}
+                    className="ml-2 text-[10px] text-blue-600 border border-blue-200 bg-blue-50 px-1.5 rounded hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    title="Show location on map"
+                    aria-label={`Show ${d.poi_name} on map`}
+                  >
+                    📍 Map
+                  </button>
+                )}
               </li>
             ))}
           </ol>
@@ -532,6 +631,8 @@ const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave }: { 
             <span>Accommodation:</span>
             <span>{plan.cost_breakdown.accommodation} EUR</span>
           </div>
+          <div className="text-[10px] text-slate-400 pl-2 italic">{plan.cost_breakdown.accom_note}</div>
+
           <div className="flex justify-between">
             <span>Meals:</span>
             <span>{plan.cost_breakdown.meals} EUR</span>
@@ -540,10 +641,23 @@ const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave }: { 
             <span>Entry Fees:</span>
             <span>{plan.cost_breakdown.entry_fees} EUR</span>
           </div>
-          <div className="flex justify-between">
-            <span>Extras (8%):</span>
-            <span>{plan.cost_breakdown.extras} EUR</span>
+          
+          <div className="pt-2 mt-2 border-t border-slate-200">
+            <strong className="block text-slate-600 mb-1">Extras & Contingency:</strong>
+            <div className="flex justify-between pl-2">
+               <span>Activity Fees:</span>
+               <span>{plan.cost_breakdown.activity_fees} EUR</span>
+            </div>
+            <div className="flex justify-between pl-2">
+               <span>Local Transport:</span>
+               <span>{plan.cost_breakdown.local_transport} EUR</span>
+            </div>
+            <div className="flex justify-between pl-2">
+               <span>Contingency (5%):</span>
+               <span>{plan.cost_breakdown.contingency} EUR</span>
+            </div>
           </div>
+
           <div className="flex justify-between font-bold text-slate-700 pt-2 border-t border-slate-200 mt-1">
             <span>Total Trip Cost:</span>
             <span>{plan.cost_breakdown.total} EUR</span>
@@ -558,13 +672,25 @@ const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave }: { 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {plan.sources.map((s, i) => (
             <div key={i} className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col transition hover:shadow-md hover:border-blue-200">
-              {s.url ? (
-                <a href={s.url} target="_blank" rel="noreferrer" className="font-bold text-sm text-blue-600 hover:underline truncate block mb-1">
-                  {s.title} ↗
-                </a>
-              ) : (
-                <span className="font-bold text-sm text-slate-700 truncate block mb-1">{s.title}</span>
-              )}
+              <div className="flex justify-between items-start mb-1">
+                  {s.url ? (
+                    <a href={s.url} target="_blank" rel="noreferrer" className="font-bold text-sm text-blue-600 hover:underline truncate block">
+                      {s.title} ↗
+                    </a>
+                  ) : (
+                    <span className="font-bold text-sm text-slate-700 truncate block">{s.title}</span>
+                  )}
+                  {s.lat && s.lng && (
+                      <button 
+                        onClick={() => onShowPoi(s.lat!, s.lng!)} 
+                        title="Show on Map"
+                        className="text-xs text-slate-400 hover:text-blue-600 p-1 hover:bg-slate-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        aria-label={`Show ${s.title} on map`}
+                      >
+                        📍 Map
+                      </button>
+                  )}
+              </div>
               
               {s.description ? (
                  <p className="text-xs text-slate-600 mt-1 leading-relaxed">{s.description}</p>

@@ -16,7 +16,7 @@ export interface Poi {
 
 export interface TripFormState {
   origin: string;
-  destinations: string[]; // Changed from single string to array
+  destinations: string[]; 
   scope: 'specific' | 'regional';
   trip_type: string;
   grade_level: string;
@@ -35,16 +35,20 @@ export interface CostBreakdown {
   accommodation: number;
   meals: number;
   entry_fees: number;
-  extras: number;
+  activity_fees: number; // New
+  local_transport: number; // New
+  contingency: number; // New (formerly generic extras)
   total: number;
   per_student: number;
   transport_note: string;
   accom_rate_per_person: number;
+  accom_note: string; // New: detailed rate info
 }
 
 export interface ItineraryDay {
   day: number;
   activity: string;
+  poi_name?: string;
 }
 
 export interface SourceLink {
@@ -53,6 +57,8 @@ export interface SourceLink {
   source: string;
   verified: boolean;
   description?: string;
+  lat?: number;
+  lng?: number;
 }
 
 export interface TripPlan {

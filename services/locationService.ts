@@ -9,6 +9,13 @@ import { TripFormState, PlannerResult, TripPlan, GeoLocation, Poi, CostBreakdown
 export function normalizeDate(input: string): string | null {
   if (!input) return null;
   let s = String(input).trim();
+  
+  // Handle ISO YYYY-MM-DD from date picker
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-');
+      return `${d}.${m}.${y}`;
+  }
+
   s = s.replace(/[\/\-\s]+/g, '.');
   s = s.replace(/^\.+|\.+$/g, '');
   const parts = s.split('.');
@@ -65,7 +72,6 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 
 function cleanJsonString(str: string): string {
   if (!str) return '{}';
-  // Remove markdown code blocks if present (```json ... ```)
   return str.replace(/```json/g, '').replace(/```/g, '').trim();
 }
 
@@ -181,7 +187,6 @@ async function fetchOpenTripMapPOIs(lat: number, lng: number, radius_m = 10000):
   }
 }
 
-// Updated to accept coordinates array
 async function orsRouteDistance(coordinates: [number, number][]) {
   if (!ORS_KEY) return null;
   try {
@@ -297,13 +302,15 @@ interface GenItineraryResult {
 }
 
 async function generateGeminiItinerary(
-  destinations: string[], // Changed to array of strings
+  destinations: string[],
   days: number,
   grade: string,
   focus: string,
   tier: string,
   origin: string,
-  poiList: { label: string, url: string | null }[]
+  travelTimeHours: number, 
+  poiList: { label: string, url: string | null }[],
+  notes?: string
 ): Promise<GenItineraryResult> {
   if (typeof process === 'undefined' || !process.env || !process.env.API_KEY) {
     return { itinerary: [], poi_descriptions: [] };
@@ -318,19 +325,20 @@ async function generateGeminiItinerary(
 
     const poiContext = uniquePois.map(p => `- ${p.label}${p.url ? ` (URL: ${p.url})` : ''}`).join('\n');
     
-    // Construct trip path string
     const tripPath = [origin, ...destinations].join(' -> ');
 
     const prompt = `
       You are a world-class educational travel specialist. Create a deeply detailed, logistical, and educational day-by-day itinerary for a ${days}-day school trip.
       
       ROUTE: ${tripPath}
-      (The trip must visit these locations in order)
+      (The trip must visit these locations in order, starting from ${origin} and ENDING in ${origin})
 
       PARAMETERS:
       - Grade Level: ${grade}
       - Primary Focus: ${focus}
       - Budget Tier: ${tier} (STRICTLY ADHERE TO THIS FOR DINING CHOICES)
+      - One-way Return Travel Duration from last stop: Approx ${Math.ceil(travelTimeHours)} hours.
+      - SPECIAL NOTES/REQUIREMENTS: ${notes || "None"} (Ensure these are reflected in the itinerary!)
       
       CONTEXTUAL POIs (Use these if relevant to the stops):
       ${poiContext}
@@ -340,18 +348,23 @@ async function generateGeminiItinerary(
       EVERY activity block MUST start with a specific time range in this exact format: "HH:MM AM - HH:MM PM".
 
       CONTENT REQUIREMENTS:
-      1.  **Day 1**: Departure from ${origin}, travel to first stop/destination. Include specific timing for departure and arrival.
-      2.  **Daily Structure**:
+      1.  **Day 1**: "08:00 AM - Departure from ${origin}..." followed by travel, arrival, and evening activity.
+      2.  **Middle Days**: Full sightseeing.
           - **Morning**: "09:00 AM - 12:00 PM - Visit [Specific Site]..."
           - **Lunch**: "12:00 PM - 01:30 PM - Lunch at [Specific Restaurant Name]..." (MUST be a real, specific place suitable for students and the budget tier: ${tier}).
           - **Afternoon**: "02:00 PM - 05:00 PM - Visit [Specific Site]..."
           - **Evening**: "06:30 PM - 08:30 PM - Dinner at [Specific Restaurant Name]..."
-      3.  **Last Day**: Morning activity, checkout, return journey to ${origin}.
+      3.  **Last Day (Day ${days})**: CRITICAL REQUIREMENT:
+          - The group MUST arrive back in ${origin} by ~20:00 or 21:00.
+          - Calculate backwards: If arrival in ${origin} is 20:00, and travel is ${Math.ceil(travelTimeHours)}h, departure MUST be around ${Math.max(0, 20 - Math.ceil(travelTimeHours))}:00.
+          - Structure: Morning Activity (if time permits before departure) -> Checkout -> "Departure for ${origin}" -> Arrival.
+          - Do NOT plan a full day of sightseeing if the return travel is long.
       
       CRITICAL RULES:
       - **NO generic timings** like "Morning". Use "09:00 AM - 12:00 PM".
       - **NO generic restaurants** like "Local Eatery". Use real names.
-      - **Route Logic**: Ensure the itinerary splits time appropriately between the specific destinations listed in the Route: ${tripPath}.
+      - **Route Logic**: Ensure the itinerary splits time appropriately between the specific destinations listed.
+      - **Notes**: If special requirements (allergies, accessibility) are provided, explicitly mention how they are accommodated (e.g. "Lunch at X (nut-free options available)").
 
       ADDITIONAL TASK:
       Provide a detailed, engaging educational description (approx 30-50 words) for EACH of the Contextual POIs listed above.
@@ -360,7 +373,11 @@ async function generateGeminiItinerary(
       Return ONLY valid JSON:
       {
         "itinerary": [
-          { "day": 1, "description": "..." },
+          { 
+            "day": 1, 
+            "description": "...", 
+            "poi_name": "Exact Name of POI if applicable (optional)"
+          },
           ...
         ],
         "poi_descriptions": [
@@ -383,7 +400,8 @@ async function generateGeminiItinerary(
                 type: Type.OBJECT,
                 properties: {
                   day: { type: Type.INTEGER },
-                  description: { type: Type.STRING, description: "Detailed daily agenda with timings and specific restaurants." }
+                  description: { type: Type.STRING, description: "Detailed daily agenda with timings and specific restaurants." },
+                  poi_name: { type: Type.STRING, description: "Exact name of a POI mentioned in this day's description, if any, that matches a Contextual POI." }
                 },
                 required: ['day', 'description']
               }
@@ -412,7 +430,8 @@ async function generateGeminiItinerary(
         .sort((a: any, b: any) => a.day - b.day)
         .map((item: any) => ({
           day: item.day,
-          activity: item.description
+          activity: item.description,
+          poi_name: item.poi_name // Capture the POI reference
         }));
     }
     
@@ -448,16 +467,13 @@ function estimateCosts(params: TripFormState, distance_km: number, days: number,
     transportCostTotal = people * RATES.train_per_person_avg;
     transportNote = `Trains for ${people} pax @ ~${RATES.train_per_person_avg} EUR`;
   } else if (params.transport_pref === 'ferry') {
-    transportCostTotal = people * 80; // Estimated ferry cost
+    transportCostTotal = people * 80;
     transportNote = `Ferry for ${people} pax @ ~80 EUR`;
   } else if (params.transport_pref === 'private_car') {
-    // Approx 0.30 EUR/km for fuel/wear
-    transportCostTotal = distance_km * 0.30 * 2; // Round trip
+    transportCostTotal = distance_km * 0.30 * 2;
     transportNote = `Private Car ~${distance_km.toFixed(0)} km (round-trip) @ 0.30 EUR/km`;
   } else {
-    // Bus (default)
     const buses = Math.max(1, Math.ceil(people / RATES.bus_capacity));
-    // Round trip + daily local usage (approx 50km/day)
     const totalDist = (distance_km * 2) + (days * 50);
     transportCostTotal = buses * totalDist * RATES.bus_cost_per_km_per_bus;
     transportNote = `${buses} bus(es) × ~${totalDist.toFixed(0)} km (round-trip + local) × ${RATES.bus_cost_per_km_per_bus} EUR/km`;
@@ -471,7 +487,13 @@ function estimateCosts(params: TripFormState, distance_km: number, days: number,
   const accomTotal = accomRate * people * nights;
   const mealsTotal = RATES.meals_per_person_per_day * people * days;
   const entryTotal = (RATES.entry_fee_per_student_avg * students) + (RATES.entry_fee_per_student_avg * teachers * RATES.teacher_discount);
-  const extras = safe((transportCostTotal + accomTotal + mealsTotal + entryTotal) * 0.08);
+  
+  // Refined Extras Breakdown
+  const activityFees = safe(entryTotal * 0.2); // Additional workshops/guides approx 20% of entry
+  const localTransport = safe(days * people * 5); // Approx 5 EUR/day/person for local transit/metro
+  const contingency = safe((transportCostTotal + accomTotal + mealsTotal + entryTotal) * 0.05); // 5% contingency
+  
+  const extras = safe(activityFees + localTransport + contingency);
   const total = safe(transportCostTotal + accomTotal + mealsTotal + entryTotal + extras);
   const perStudent = safe(total / Math.max(1, students));
 
@@ -481,11 +503,14 @@ function estimateCosts(params: TripFormState, distance_km: number, days: number,
       accommodation: safe(accomTotal),
       meals: safe(mealsTotal),
       entry_fees: safe(entryTotal),
-      extras: extras,
+      activity_fees: activityFees,
+      local_transport: localTransport,
+      contingency: contingency,
       total: total,
       per_student: perStudent,
       transport_note: transportNote,
-      accom_rate_per_person: accomRate
+      accom_rate_per_person: accomRate,
+      accom_note: `${nights} nights @ ~${accomRate} EUR/person (${planTier})`
     }
   };
 }
@@ -506,7 +531,6 @@ function computeReliability(sources: any[]) {
 }
 
 export async function buildThreePlans(formData: TripFormState, forceTemplates = false): Promise<PlannerResult> {
-  // 1. Validate
   const dep = parseDateNormalized(formData.dep_date);
   const ret = parseDateNormalized(formData.ret_date);
   if (!dep || !ret) throw new Error("Invalid dates.");
@@ -514,7 +538,6 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
   const days = daysInclusive(dep, ret);
   if (formData.trip_type.toLowerCase().includes('multi') && days < 2) throw new Error("Multi-day trip must be at least 2 days.");
 
-  // 2. Geocode Origin
   let originGeo: GeoLocation | null = null;
   if (formData.origin && formData.origin.trim() !== '') {
     originGeo = await geocodeGeoNames(formData.origin) || await geocodeORS(formData.origin);
@@ -523,17 +546,12 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
     originGeo = { lat: IDSS_COORDS.lat, lng: IDSS_COORDS.lng, name: 'IDSS Sarajevo', source: 'default', url: null };
   }
 
-  // 3. Candidates (Destinations)
-  // If specific destinations provided, we create a single "Complex Route" candidate.
-  // If regional, we find 3 distinct single-destination candidates.
-  
   let complexRouteCandidate: { stops: GeoLocation[] } | null = null;
   let candidates: { city: string; country?: string; lat?: number; lng?: number }[] = [];
 
   const validDestinations = formData.destinations.filter(d => d.trim().length > 0);
 
   if (validDestinations.length > 0) {
-    // Specific Route mode
     const resolvedStops: GeoLocation[] = [];
     for (const dest of validDestinations) {
         const ge = await geocodeGeoNames(dest) || await geocodeORS(dest);
@@ -545,8 +563,6 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
         complexRouteCandidate = { stops: resolvedStops };
     }
   } else {
-    // Suggest destinations (Regional Mode)
-    // Attempt Gemini First
     if (!forceTemplates && typeof process !== 'undefined' && process.env && process.env.API_KEY) {
       const prompt = `Suggest 3 distinct and best cities/regions for a ${formData.trip_type} field trip for grade ${formData.grade_level} students. Focus: ${formData.focus}. Scope: ${formData.scope}. Origin: ${originGeo.name}.`;
       const geminiSuggs = await getGeminiSuggestions(prompt, originGeo.lat, originGeo.lng);
@@ -569,32 +585,20 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
     }
   }
 
-  // 6. Build Plans
-  // If complexRouteCandidate exists, we generate 3 plans (Budget, Balanced, Premium) for the SAME route.
-  // If not, we generate 3 plans for DIFFERENT destinations (from candidates).
-
   const tiers = ['budget', 'balanced', 'premium'] as const;
   const plansOut: TripPlan[] = [];
 
-  // Determine what we are iterating over
-  // Case A: Multi-stop specific route -> 3 tiers for the same route
-  // Case B: Suggestions -> 3 different locations, mixed tiers (or same tier?) -> Let's do 3 different locations with 'Balanced' tier or vary them.
-  // Actually, standard logic was 3 different locations with Budget/Balanced/Premium.
-  
   if (complexRouteCandidate) {
-      // Generate 3 tiers for the one complex route
       for (const tier of tiers) {
           const stops = complexRouteCandidate.stops;
           const destinationTitle = stops.map(s => s.name).join(' -> ');
           const title = `${destinationTitle} — ${tier.charAt(0).toUpperCase() + tier.slice(1)}`;
           
-          // Calculate Route (Multi-stop)
           const coords: [number, number][] = [[originGeo.lng, originGeo.lat]];
           stops.forEach(s => coords.push([s.lng, s.lat]));
           
           let routeInfo = await orsRouteDistance(coords);
           
-          // Fallback if ORS fails (simple haversine sum)
           if (!routeInfo || !routeInfo.distance_m) {
               let totalMeters = 0;
               let poly: [number, number][] = [[originGeo.lat, originGeo.lng]];
@@ -612,15 +616,19 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
           }
 
           const distance_km = (routeInfo.distance_m || 0) / 1000;
+          const travel_time_h = (routeInfo.duration_s || 0) / 3600;
+          
+          if (travel_time_h * 2 > (days * 9)) {
+             throw new Error(`Itinerary impossible: Estimated driving time (${Math.round(travel_time_h * 2)}h round-trip) exceeds available days (${days}). Please add more days or reduce destinations.`);
+          }
+
           const cost = estimateCosts(formData, distance_km, Math.max(1, days), tier);
 
-          // Gather POIs for ALL stops
           let allPois: Poi[] = [];
           if (!forceTemplates) {
               for (const stop of stops) {
-                  const otmPois = await fetchOpenTripMapPOIs(stop.lat, stop.lng, 5000); // 5km radius per stop
+                  const otmPois = await fetchOpenTripMapPOIs(stop.lat, stop.lng, 5000); 
                   allPois = [...allPois, ...otmPois];
-                  // If low, try wikidata
                   if (otmPois.length < 2) {
                       const wiki = await wikidataPOIs(stop.lat, stop.lng, 10, formData.focus);
                       allPois = [...allPois, ...wiki];
@@ -628,7 +636,6 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
               }
           }
 
-          // Generate Itinerary
           let itinerary: ItineraryDay[] = [];
           let poiDescriptions: Map<string, string> = new Map();
 
@@ -640,17 +647,18 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
                   formData.focus,
                   tier,
                   originGeo.name,
-                  allPois.map(p => ({ label: p.label, url: p.url }))
+                  travel_time_h,
+                  allPois.map(p => ({ label: p.label, url: p.url })),
+                  formData.notes
               );
               if (generated.itinerary.length > 0) itinerary = generated.itinerary;
               generated.poi_descriptions.forEach(d => poiDescriptions.set(d.name, d.description));
           }
 
-          // Build Sources
           const sources: SourceLink[] = [];
           allPois.slice(0, 15).forEach(p => {
               let desc = poiDescriptions.get(p.label);
-              if (!desc) { // Fuzzy match fallback
+              if (!desc) {
                   for (const [key, val] of poiDescriptions.entries()) {
                       if (key.includes(p.label) || p.label.includes(key)) {
                           desc = val; break;
@@ -658,10 +666,18 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
                   }
               }
               if (p.url || desc) {
-                  sources.push({ url: p.url, title: p.label, source: p.source, verified: !!p.url, description: desc });
+                  sources.push({ 
+                      url: p.url, 
+                      title: p.label, 
+                      source: p.source, 
+                      verified: !!p.url, 
+                      description: desc,
+                      lat: p.lat,
+                      lng: p.lng
+                  });
               }
           });
-          sources.push({ url: originGeo.url, title: originGeo.name, source: originGeo.source, verified: !!originGeo.url, description: 'Departure' });
+          sources.push({ url: originGeo.url, title: originGeo.name, source: originGeo.source, verified: !!originGeo.url, description: 'Departure', lat: originGeo.lat, lng: originGeo.lng });
           const uniqueSources = sources.filter((s, index, self) => index === self.findIndex((t) => (t.url === s.url && t.title === s.title)));
 
           plansOut.push({
@@ -673,7 +689,7 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
               estimated_cost_per_student: `${cost.breakdown.per_student} EUR`,
               cost_breakdown: cost.breakdown,
               distance_km: safe(distance_km),
-              travel_time_h: safe((routeInfo.duration_s || 0) / 3600),
+              travel_time_h: safe(travel_time_h),
               accompanying_teachers: formData.teachers,
               why: `Multi-stop route fitting focus: ${formData.focus}.`,
               sources: uniqueSources.slice(0, 8),
@@ -682,8 +698,6 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
       }
 
   } else {
-      // Original logic: 3 different destinations (Regional Suggestions)
-      // Enrich Candidates first
       const enriched = [];
       for (const c of candidates) {
           let ge: GeoLocation | null = null;
@@ -694,10 +708,8 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
           }
           if (!ge) continue;
 
-          // Fetch POIs for this single city
           let pois: Poi[] = [];
           if (!forceTemplates) {
-              // Try OTM first
               const otm = await fetchOpenTripMapPOIs(ge.lat, ge.lng, 8000);
               pois = [...otm];
               if (pois.length < 5) {
@@ -709,18 +721,14 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
           if (enriched.length >= 3) break; 
       }
 
-      // Ensure we have 3
       const chosen = [];
       if (enriched.length >= 3) {
           chosen.push(enriched[0], enriched[1], enriched[2]);
       } else {
-          // Fill
           for (const e of enriched) chosen.push(e);
-          // Fallback if still empty
           if (chosen.length === 0) {
              chosen.push({ city: 'Sarajevo, BiH', lat: 43.8563, lng: 18.4131, pois: [] });
           }
-          // Duplicate last if needed to get 3
           while(chosen.length < 3) chosen.push(chosen[0]);
       }
 
@@ -729,7 +737,6 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
           const cand = chosen[i];
           const title = `${cand.city} — ${tier.charAt(0).toUpperCase() + tier.slice(1)}`;
 
-          // Route
           let routeInfo = await orsRouteDistance([[originGeo.lng, originGeo.lat], [cand.lng, cand.lat]]);
           if (!routeInfo || !routeInfo.distance_m) {
               const m = haversineDistance(originGeo.lat, originGeo.lng, cand.lat, cand.lng);
@@ -737,6 +744,8 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
           }
           
           const distance_km = (routeInfo.distance_m || 0) / 1000;
+          const travel_time_h = (routeInfo.duration_s || 0) / 3600;
+          
           const cost = estimateCosts(formData, distance_km, Math.max(1, days), tier);
 
           let itinerary: ItineraryDay[] = [];
@@ -750,13 +759,14 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
                   formData.focus,
                   tier,
                   originGeo.name,
-                  cand.pois.map(p => ({ label: p.label, url: p.url }))
+                  travel_time_h, 
+                  cand.pois.map(p => ({ label: p.label, url: p.url })),
+                  formData.notes
               );
               if (generated.itinerary.length > 0) itinerary = generated.itinerary;
               generated.poi_descriptions.forEach(d => poiDescriptions.set(d.name, d.description));
           }
 
-          // Build Sources
           const sources: SourceLink[] = [];
           cand.pois.forEach(p => {
               let desc = poiDescriptions.get(p.label);
@@ -765,9 +775,17 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
                       if (key.includes(p.label) || p.label.includes(key)) { desc = val; break; }
                   }
               }
-              if (p.url || desc) sources.push({ url: p.url, title: p.label, source: p.source, verified: !!p.url, description: desc });
+              if (p.url || desc) sources.push({ 
+                  url: p.url, 
+                  title: p.label, 
+                  source: p.source, 
+                  verified: !!p.url, 
+                  description: desc,
+                  lat: p.lat, // Pass coords
+                  lng: p.lng  // Pass coords
+              });
           });
-          sources.push({ url: originGeo.url, title: originGeo.name, source: originGeo.source, verified: !!originGeo.url, description: 'Departure' });
+          sources.push({ url: originGeo.url, title: originGeo.name, source: originGeo.source, verified: !!originGeo.url, description: 'Departure', lat: originGeo.lat, lng: originGeo.lng });
           const uniqueSources = sources.filter((s, index, self) => index === self.findIndex((t) => (t.url === s.url && t.title === s.title)));
 
           plansOut.push({
@@ -779,7 +797,7 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
               estimated_cost_per_student: `${cost.breakdown.per_student} EUR`,
               cost_breakdown: cost.breakdown,
               distance_km: safe(distance_km),
-              travel_time_h: safe((routeInfo.duration_s || 0) / 3600),
+              travel_time_h: safe(travel_time_h),
               accompanying_teachers: formData.teachers,
               why: `Fits focus: ${formData.focus}.`,
               sources: uniqueSources.slice(0, 6),

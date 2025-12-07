@@ -13,9 +13,10 @@ interface MapViewProps {
   focusedPlanIndex?: number | null;
   onPlanSelect?: (index: number) => void;
   isLoading?: boolean;
+  focusedLocation?: { lat: number; lng: number } | null;
 }
 
-const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPlanSelect, isLoading }) => {
+const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPlanSelect, isLoading, focusedLocation }) => {
   const mapRef = useRef<any>(null);
   const layerGroupRef = useRef<any>(null);
   const mapContainerId = 'leaflet-map-container';
@@ -35,6 +36,31 @@ const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPl
     }
 
     const map = mapRef.current;
+    
+    // Handle arbitrary focused location
+    if (focusedLocation) {
+        map.setView([focusedLocation.lat, focusedLocation.lng], 15, { animate: true });
+        
+        // Add a temporary marker for the focused location
+        const icon = L.divIcon({
+            className: 'custom-icon',
+            html: `<div style="background:#ef4444; width:20px; height:20px; border:3px solid white; border-radius:50%; box-shadow: 0 4px 6px rgba(0,0,0,0.3);"></div>`,
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        });
+        
+        // Remove existing temp markers
+        map.eachLayer((layer: any) => {
+            if (layer.options && layer.options.isTemp) {
+                map.removeLayer(layer);
+            }
+        });
+
+        const tempMarker = L.marker([focusedLocation.lat, focusedLocation.lng], { icon, isTemp: true }).addTo(map);
+        setTimeout(() => map.removeLayer(tempMarker), 5000); // Auto remove after 5s
+        return;
+    }
+
     const layers = layerGroupRef.current;
     
     // Redraw layers
@@ -115,7 +141,10 @@ const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPl
           }
         });
         
-        // Destination Marker
+        // Destination Marker (draw markers for all points in polyline if it's a multi-stop, otherwise just last)
+        // Simplification: Draw last point as main destination marker. 
+        // For complex routes, maybe we should draw intermediate points? 
+        // Let's stick to the last point for simplicity or draw key stops if we had them explicitly.
         const last = plan.polyline[plan.polyline.length - 1];
         if (last) {
           const markerSize = isFocused ? 16 : 12;
@@ -160,7 +189,7 @@ const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPl
       map.fitBounds(allBounds, { padding: [50, 50], animate: true });
     }
 
-  }, [origin, plans, focusedPlanIndex, onPlanSelect]);
+  }, [origin, plans, focusedPlanIndex, onPlanSelect, focusedLocation]);
 
   return (
     <div className="relative w-full h-full min-h-[460px] rounded-xl border border-slate-200 z-0 bg-slate-50">
