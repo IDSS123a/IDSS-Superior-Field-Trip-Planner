@@ -6,6 +6,25 @@ import { TripFormState, PlannerResult, TripPlan, GeoLocation, Poi, CostBreakdown
    Utilities
    =========================== */
 
+// Helper to get API Key securely with rotation
+const getGeminiApiKey = (): string | undefined => {
+  // 1. Try to get the list of keys from environment variables
+  // VITE_GEMINI_API_KEYS should be a comma-separated string of keys in Vercel
+  const keysString = process.env.VITE_GEMINI_API_KEYS || process.env.API_KEY;
+
+  if (!keysString) return undefined;
+
+  // Split by comma and clean up whitespace
+  const keys = keysString.split(',').map(k => k.trim()).filter(k => k.length > 0);
+
+  if (keys.length === 0) return undefined;
+
+  // 2. Randomly select one key from the available list
+  // This simple rotation strategy distributes load effectively across multiple free-tier accounts.
+  const randomIndex = Math.floor(Math.random() * keys.length);
+  return keys[randomIndex];
+};
+
 export function normalizeDate(input: string): string | null {
   if (!input) return null;
   let s = String(input).trim();
@@ -72,6 +91,7 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 
 function cleanJsonString(str: string): string {
   if (!str) return '{}';
+  // Remove markdown code blocks if present (```json ... ```)
   return str.replace(/```json/g, '').replace(/```/g, '').trim();
 }
 
@@ -249,12 +269,13 @@ async function orsPOIsAround(lon: number, lat: number, radius_m = 7000) {
    =========================== */
 
 async function getGeminiSuggestions(prompt: string, lat: number, lng: number): Promise<Poi[]> {
-  if (typeof process === 'undefined' || !process.env || !process.env.API_KEY) {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
     return [];
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
@@ -312,12 +333,13 @@ async function generateGeminiItinerary(
   poiList: { label: string, url: string | null }[],
   notes?: string
 ): Promise<GenItineraryResult> {
-  if (typeof process === 'undefined' || !process.env || !process.env.API_KEY) {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
     return { itinerary: [], poi_descriptions: [] };
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
     
     const uniquePois = poiList.filter((poi, index, self) => 
       index === self.findIndex((t) => (t.label === poi.label))
@@ -563,7 +585,10 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
         complexRouteCandidate = { stops: resolvedStops };
     }
   } else {
-    if (!forceTemplates && typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+    // Suggest destinations
+    // Only attempt Gemini if API Key is available
+    const apiKey = getGeminiApiKey();
+    if (!forceTemplates && apiKey) {
       const prompt = `Suggest 3 distinct and best cities/regions for a ${formData.trip_type} field trip for grade ${formData.grade_level} students. Focus: ${formData.focus}. Scope: ${formData.scope}. Origin: ${originGeo.name}.`;
       const geminiSuggs = await getGeminiSuggestions(prompt, originGeo.lat, originGeo.lng);
       
