@@ -12,9 +12,10 @@ interface MapViewProps {
   plans: TripPlan[];
   focusedPlanIndex?: number | null;
   onPlanSelect?: (index: number) => void;
+  isLoading?: boolean;
 }
 
-const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPlanSelect }) => {
+const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPlanSelect, isLoading }) => {
   const mapRef = useRef<any>(null);
   const layerGroupRef = useRef<any>(null);
   const mapContainerId = 'leaflet-map-container';
@@ -162,10 +163,21 @@ const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPl
   }, [origin, plans, focusedPlanIndex, onPlanSelect]);
 
   return (
-    <div 
-      id={mapContainerId} 
-      className="w-full h-full min-h-[460px] rounded-xl border border-slate-200 z-0 relative"
-    />
+    <div className="relative w-full h-full min-h-[460px] rounded-xl border border-slate-200 z-0 bg-slate-50">
+      <div 
+        id={mapContainerId} 
+        className="w-full h-full rounded-xl"
+      />
+      {isLoading && (
+        <div className="absolute inset-0 z-[2000] bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center rounded-xl text-slate-600 font-bold transition-all duration-300">
+          <svg className="animate-spin h-10 w-10 text-blue-600 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="text-sm tracking-wide">Updating Map...</span>
+        </div>
+      )}
+    </div>
   );
 };
 

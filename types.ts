@@ -16,13 +16,13 @@ export interface Poi {
 
 export interface TripFormState {
   origin: string;
-  destination: string;
+  destinations: string[]; // Changed from single string to array
   scope: 'specific' | 'regional';
   trip_type: string;
   grade_level: string;
   num_students: number;
   teachers: string;
-  transport_pref: 'bus' | 'plane' | 'train' | 'mixed';
+  transport_pref: 'bus' | 'plane' | 'train' | 'ferry' | 'private_car' | 'mixed';
   dep_date: string;
   ret_date: string;
   budget: string;

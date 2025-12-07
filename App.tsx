@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import MapView from './components/MapView';
 import { buildThreePlans, parseDateNormalized } from './services/locationService';
 import { TripFormState, PlannerResult, TripPlan } from './types';
@@ -8,7 +8,7 @@ declare const html2pdf: any;
 function App() {
   const [form, setForm] = useState<TripFormState>({
     origin: '',
-    destination: '',
+    destinations: [''], // Start with one empty destination slot
     scope: 'regional',
     trip_type: 'Multi-day excursion',
     grade_level: '9',
@@ -29,10 +29,10 @@ function App() {
   const [result, setResult] = useState<PlannerResult | null>(null);
   const [focusedPlan, setFocusedPlan] = useState<number | null>(null);
 
+  // Generic handler for simple fields
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setForm(prev => ({ ...prev, [name]: value }));
-    // Clear error for this field when user types
     if (validationErrors[name]) {
       setValidationErrors(prev => {
         const newErrors = { ...prev };
@@ -42,12 +42,43 @@ function App() {
     }
   };
 
+  // Specific handler for destinations array
+  const handleDestinationChange = (index: number, value: string) => {
+    const newDestinations = [...form.destinations];
+    newDestinations[index] = value;
+    setForm(prev => ({ ...prev, destinations: newDestinations }));
+    
+    // Auto-switch scope to 'specific' if user types something
+    if (value.trim() !== '' && form.scope === 'regional') {
+        setForm(prev => ({ ...prev, scope: 'specific', destinations: newDestinations }));
+    }
+    
+    if (validationErrors.destinations) {
+        setValidationErrors(prev => { const e = {...prev}; delete e.destinations; return e; });
+    }
+  };
+
+  const addDestination = () => {
+    setForm(prev => ({ ...prev, destinations: [...prev.destinations, ''] }));
+  };
+
+  const removeDestination = (index: number) => {
+    if (form.destinations.length === 1) {
+        // If only one, just clear it
+        handleDestinationChange(0, '');
+        return;
+    }
+    const newDestinations = form.destinations.filter((_, i) => i !== index);
+    setForm(prev => ({ ...prev, destinations: newDestinations }));
+  };
+
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
     
     // 1. Destination logic
-    if (form.scope === 'specific' && !form.destination.trim()) {
-      errors.destination = 'Destination is required for "Specific destination" scope.';
+    const hasValidDest = form.destinations.some(d => d.trim().length > 0);
+    if (form.scope === 'specific' && !hasValidDest) {
+      errors.destinations = 'At least one destination is required for "Specific destination" scope.';
     }
 
     // 2. Required text fields
@@ -65,8 +96,25 @@ function App() {
     if (!d1) errors.dep_date = 'Invalid date format (DD.MM.YYYY).';
     if (!d2) errors.ret_date = 'Invalid date format (DD.MM.YYYY).';
 
-    if (d1 && d2 && d1 > d2) {
-      errors.ret_date = 'Return date cannot be before departure date.';
+    if (d1 && d2) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (d1 < today) {
+        errors.dep_date = 'Departure date cannot be in the past.';
+      }
+      if (d1 > d2) {
+        errors.ret_date = 'Return date cannot be before departure date.';
+      } else {
+        const diffTime = Math.abs(d2.getTime() - d1.getTime());
+        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+        if (form.trip_type === 'Multi-day excursion' && diffDays < 2) {
+          errors.ret_date = 'Multi-day excursion requires at least 2 days.';
+        }
+        if (form.trip_type === 'One-day excursion' && diffDays > 1) {
+          errors.ret_date = 'One-day excursion must start and end on the same day.';
+        }
+      }
     }
 
     setValidationErrors(errors);
@@ -93,10 +141,55 @@ function App() {
     }
   };
 
+  const handleSavePlan = (plan: TripPlan) => {
+    try {
+      const savedStr = localStorage.getItem('idss_saved_plans');
+      let savedPlans: TripPlan[] = savedStr ? JSON.parse(savedStr) : [];
+      const isDuplicate = savedPlans.some(p => p.title === plan.title && p.destination === plan.destination && p.distance_km === plan.distance_km);
+      if (isDuplicate) {
+        alert("This plan is already saved.");
+        return;
+      }
+      savedPlans.push(plan);
+      localStorage.setItem('idss_saved_plans', JSON.stringify(savedPlans));
+      alert("Plan saved successfully!");
+    } catch (e) {
+      console.error("Error saving plan:", e);
+      alert("Failed to save plan. Storage might be full.");
+    }
+  };
+
+  const handleLoadSavedPlans = () => {
+    try {
+      const savedStr = localStorage.getItem('idss_saved_plans');
+      if (!savedStr) {
+        alert("No saved plans found.");
+        return;
+      }
+      const savedPlans: TripPlan[] = JSON.parse(savedStr);
+      if (savedPlans.length === 0) {
+        alert("No saved plans found.");
+        return;
+      }
+      setResult({
+        origin: null, 
+        plans: savedPlans
+      });
+      setFocusedPlan(null);
+      setError(null);
+    } catch (e) {
+      console.error("Error loading plans:", e);
+      setError("Failed to load saved plans.");
+    }
+  };
+
   const handleExportPDF = () => {
     const element = document.getElementById('export-container');
-    if (!element || typeof html2pdf === 'undefined') return;
-    
+    if (typeof html2pdf === 'undefined') {
+      alert("PDF library is not loaded. Please check your internet connection.");
+      return;
+    }
+    if (!element) return;
     const opt = {
       margin: 10,
       filename: 'IDSS_field_trip_plans.pdf',
@@ -107,11 +200,9 @@ function App() {
     html2pdf().set(opt).from(element).save();
   };
 
-  const handleMapPlanSelect = (index: number) => {
+  const handleMapPlanSelect = useCallback((index: number) => {
     setMapLoadingId(index);
     setFocusedPlan(index);
-    
-    // Simulate short delay for visual feedback if instant
     setTimeout(() => {
         const element = document.getElementById(`plan-card-${index}`);
         if (element) {
@@ -119,7 +210,7 @@ function App() {
         }
         setMapLoadingId(null);
     }, 400);
-  };
+  }, []);
 
   return (
     <div className="min-h-screen bg-white p-4 md:p-8 font-sans" id="export-container">
@@ -143,14 +234,33 @@ function App() {
               <input name="origin" value={form.origin} onChange={handleChange} placeholder="npr. Sarajevo" className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
             </InputGroup>
 
-            <InputGroup label="Destinacija" sub="(ostavi prazno za prijedloge)" error={validationErrors.destination}>
-              <input name="destination" value={form.destination} onChange={handleChange} placeholder="npr. Berlin" className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none" />
-            </InputGroup>
+            <div className="md:col-span-2">
+              <label className={`block text-xs font-semibold mb-1 ${validationErrors.destinations ? 'text-red-600' : 'text-slate-500'}`}>
+                Ruta Putovanja (Destinacije) <span className="font-normal opacity-75">(Unesite jednu ili više tačaka)</span>
+              </label>
+              <div className="space-y-2">
+                {form.destinations.map((dest, index) => (
+                  <div key={index} className="flex gap-2">
+                    <input 
+                      value={dest} 
+                      onChange={(e) => handleDestinationChange(index, e.target.value)} 
+                      placeholder={`Stop ${index + 1} (npr. ${index === 0 ? 'Zagreb' : index === 1 ? 'Trieste' : 'Roma'})`} 
+                      className={`w-full p-2.5 rounded-lg border text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none ${validationErrors.destinations ? 'border-red-500' : 'border-slate-300'}`} 
+                    />
+                    {form.destinations.length > 1 && (
+                      <button onClick={() => removeDestination(index)} className="px-3 text-slate-400 hover:text-red-500 border border-slate-200 rounded-lg bg-slate-50 font-bold">×</button>
+                    )}
+                  </div>
+                ))}
+                <button onClick={addDestination} className="text-xs text-blue-600 font-bold hover:underline">+ Add Stop</button>
+              </div>
+              {validationErrors.destinations && <p className="text-red-500 text-[10px] mt-1 font-semibold">{validationErrors.destinations}</p>}
+            </div>
 
             <InputGroup label="Opseg pretrage" error={validationErrors.scope}>
               <select name="scope" value={form.scope} onChange={handleChange} className="w-full p-2.5 rounded-lg border border-slate-300 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none">
-                <option value="specific">Specific destination only</option>
-                <option value="regional">Suggest top options (Regional)</option>
+                <option value="specific">Specific Route (Your Inputs)</option>
+                <option value="regional">Suggest Destinations (Ignore inputs)</option>
               </select>
             </InputGroup>
 
@@ -229,6 +339,9 @@ function App() {
             <Button onClick={() => handleGenerate(true)} disabled={loading}>
               {loading ? 'Processing...' : 'Generate Templates (Offline)'}
             </Button>
+            <Button onClick={handleLoadSavedPlans} disabled={loading}>
+              Load Saved Plans
+            </Button>
             <Button onClick={() => window.print()}>Print</Button>
             <Button onClick={handleExportPDF}>Download PDF</Button>
           </div>
@@ -242,6 +355,7 @@ function App() {
             plans={result?.plans || []} 
             focusedPlanIndex={focusedPlan}
             onPlanSelect={handleMapPlanSelect}
+            isLoading={loading}
           />
           {focusedPlan !== null && (
             <button 
@@ -265,6 +379,7 @@ function App() {
                 onFocus={() => handleMapPlanSelect(idx)}
                 isFocused={focusedPlan === idx}
                 isLoading={mapLoadingId === idx}
+                onSave={handleSavePlan}
               />
             ))}
           </div>
@@ -329,7 +444,7 @@ const Button = ({ children, primary, disabled, onClick }: { children: React.Reac
   </button>
 );
 
-const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading }: { plan: TripPlan, index: number, onFocus: () => void, isFocused: boolean, id?: string, isLoading?: boolean }) => (
+const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading, onSave }: { plan: TripPlan, index: number, onFocus: () => void, isFocused: boolean, id?: string, isLoading?: boolean, onSave: (plan: TripPlan) => void }) => (
   <div 
     id={id} 
     className={`bg-white rounded-xl border-l-4 shadow-sm p-5 break-inside-avoid transition-all 
@@ -344,6 +459,12 @@ const PlanCard = ({ plan, index, onFocus, isFocused, id, isLoading }: { plan: Tr
         <p className="text-sm text-slate-500">{plan.destination}</p>
       </div>
       <div className="flex items-center gap-2">
+        <button 
+          onClick={() => onSave(plan)}
+          className="text-xs px-3 py-1.5 rounded-md font-bold transition-colors bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border border-emerald-200"
+        >
+          Save
+        </button>
         <button 
           onClick={onFocus} 
           disabled={isLoading}

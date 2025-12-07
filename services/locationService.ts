@@ -63,6 +63,12 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
+function cleanJsonString(str: string): string {
+  if (!str) return '{}';
+  // Remove markdown code blocks if present (```json ... ```)
+  return str.replace(/```json/g, '').replace(/```/g, '').trim();
+}
+
 /* ===========================
    API Calls
    =========================== */
@@ -152,9 +158,7 @@ async function wikidataPOIs(lat: number, lng: number, radius_km = 15, focus = 'm
 async function fetchOpenTripMapPOIs(lat: number, lng: number, radius_m = 10000): Promise<Poi[]> {
   if (!OPENTRIPMAP_KEY) return [];
   
-  // Filter for touristy things. 'interesting_places' covers museums, historic, architecture, etc.
   const kinds = 'interesting_places'; 
-  // Rate: 1, 2, 3. 3 is most popular. We use 2 to get a good mix of popular sites.
   const rate = '2';
   
   const url = `https://api.opentripmap.com/0.1/en/places/radius?radius=${radius_m}&lon=${lng}&lat=${lat}&kinds=${kinds}&rate=${rate}&format=json&limit=15&apikey=${OPENTRIPMAP_KEY}`;
@@ -164,12 +168,10 @@ async function fetchOpenTripMapPOIs(lat: number, lng: number, radius_m = 10000):
     if (!res.ok) throw new Error('OTM error ' + res.status);
     const data = await res.json();
     
-    // Data is array of objects
     return data.map((item: any) => ({
       label: item.name,
       lat: item.point.lat,
       lng: item.point.lon,
-      // Construct a direct link to OpenTripMap card for this object
       url: `https://opentripmap.com/en/card/${item.xid}`, 
       source: 'opentripmap'
     })).filter((p: any) => p.label && p.label.trim().length > 0);
@@ -179,13 +181,14 @@ async function fetchOpenTripMapPOIs(lat: number, lng: number, radius_m = 10000):
   }
 }
 
-async function orsRouteDistance(startLon: number, startLat: number, endLon: number, endLat: number) {
+// Updated to accept coordinates array
+async function orsRouteDistance(coordinates: [number, number][]) {
   if (!ORS_KEY) return null;
   try {
     const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': ORS_KEY },
-      body: JSON.stringify({ coordinates: [[startLon, startLat], [endLon, endLat]] })
+      body: JSON.stringify({ coordinates })
     });
     if (!res.ok) throw new Error('ORS directions ' + res.status);
     const j = await res.json();
@@ -241,7 +244,6 @@ async function orsPOIsAround(lon: number, lat: number, radius_m = 7000) {
    =========================== */
 
 async function getGeminiSuggestions(prompt: string, lat: number, lng: number): Promise<Poi[]> {
-  // Ensure API key is present
   if (typeof process === 'undefined' || !process.env || !process.env.API_KEY) {
     return [];
   }
@@ -272,7 +274,6 @@ async function getGeminiSuggestions(prompt: string, lat: number, lng: number): P
         const title = chunk.maps.title;
         if (!seen.has(title)) {
           seen.add(title);
-          // We temporarily set lat/lng to 0, to be resolved via geocoding later
           results.push({
             label: title,
             lat: 0, 
@@ -296,7 +297,7 @@ interface GenItineraryResult {
 }
 
 async function generateGeminiItinerary(
-  destination: string,
+  destinations: string[], // Changed to array of strings
   days: number,
   grade: string,
   focus: string,
@@ -311,22 +312,27 @@ async function generateGeminiItinerary(
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
-    // Only use unique names
     const uniquePois = poiList.filter((poi, index, self) => 
       index === self.findIndex((t) => (t.label === poi.label))
-    ).slice(0, 12);
+    ).slice(0, 15);
 
     const poiContext = uniquePois.map(p => `- ${p.label}${p.url ? ` (URL: ${p.url})` : ''}`).join('\n');
     
+    // Construct trip path string
+    const tripPath = [origin, ...destinations].join(' -> ');
+
     const prompt = `
-      You are a world-class educational travel specialist. Create a deeply detailed, logistical, and educational day-by-day itinerary for a ${days}-day school trip to ${destination}, departing from ${origin}.
+      You are a world-class educational travel specialist. Create a deeply detailed, logistical, and educational day-by-day itinerary for a ${days}-day school trip.
+      
+      ROUTE: ${tripPath}
+      (The trip must visit these locations in order)
 
       PARAMETERS:
       - Grade Level: ${grade}
       - Primary Focus: ${focus}
       - Budget Tier: ${tier} (STRICTLY ADHERE TO THIS FOR DINING CHOICES)
       
-      CONTEXTUAL POIs (Include these if relevant):
+      CONTEXTUAL POIs (Use these if relevant to the stops):
       ${poiContext}
 
       STRICT OUTPUT FORMAT:
@@ -334,24 +340,21 @@ async function generateGeminiItinerary(
       EVERY activity block MUST start with a specific time range in this exact format: "HH:MM AM - HH:MM PM".
 
       CONTENT REQUIREMENTS:
-      1.  **Day 1 (Travel & Arrival)**:
-          - "08:00 AM - Departure from ${origin}..."
-          - arrival, check-in.
-          - "07:00 PM - 09:00 PM - Welcome Dinner at [Specific Restaurant Name]..."
-      2.  **Full Days**:
+      1.  **Day 1**: Departure from ${origin}, travel to first stop/destination. Include specific timing for departure and arrival.
+      2.  **Daily Structure**:
           - **Morning**: "09:00 AM - 12:00 PM - Visit [Specific Site]..."
           - **Lunch**: "12:00 PM - 01:30 PM - Lunch at [Specific Restaurant Name]..." (MUST be a real, specific place suitable for students and the budget tier: ${tier}).
           - **Afternoon**: "02:00 PM - 05:00 PM - Visit [Specific Site]..."
           - **Evening**: "06:30 PM - 08:30 PM - Dinner at [Specific Restaurant Name]..."
-      3.  **Last Day**: Morning activity, checkout, return journey.
+      3.  **Last Day**: Morning activity, checkout, return journey to ${origin}.
       
       CRITICAL RULES:
-      - **NO generic timings** like "Morning" or "Afternoon". Use "09:00 AM - 12:00 PM".
-      - **NO generic restaurants** like "Local Eatery". Use real names (e.g., "Vapiano", "Sarajevski Cevapi", "Hard Rock Cafe", "University Mensa").
-      - Ensure the itinerary flows logically.
+      - **NO generic timings** like "Morning". Use "09:00 AM - 12:00 PM".
+      - **NO generic restaurants** like "Local Eatery". Use real names.
+      - **Route Logic**: Ensure the itinerary splits time appropriately between the specific destinations listed in the Route: ${tripPath}.
 
       ADDITIONAL TASK:
-      Provide a detailed, engaging educational description (approx 30-50 words) for EACH of the Contextual POIs listed above. Use the provided URL (if any) as context to ensure accuracy of the description, but do not simply repeat the URL.
+      Provide a detailed, engaging educational description (approx 30-50 words) for EACH of the Contextual POIs listed above.
 
       OUTPUT SCHEMA:
       Return ONLY valid JSON:
@@ -400,7 +403,7 @@ async function generateGeminiItinerary(
       }
     });
 
-    const json = JSON.parse(response.text || '{}');
+    const json = JSON.parse(cleanJsonString(response.text));
     let it = [];
     let pd = [];
 
@@ -430,7 +433,6 @@ async function generateGeminiItinerary(
 
 function estimateCosts(params: TripFormState, distance_km: number, days: number, planTier: 'budget' | 'balanced' | 'premium'): { breakdown: CostBreakdown } {
   const students = params.num_students;
-  // Estimate 1 teacher per 15 students minimum, or use provided list count
   const providedTeachers = params.teachers ? params.teachers.split(',').filter(s => s.trim().length > 0).length : 0;
   const requiredTeachers = Math.max(1, Math.ceil(students / 15)); 
   const teachers = Math.max(providedTeachers, requiredTeachers);
@@ -445,7 +447,15 @@ function estimateCosts(params: TripFormState, distance_km: number, days: number,
   } else if (params.transport_pref === 'train') {
     transportCostTotal = people * RATES.train_per_person_avg;
     transportNote = `Trains for ${people} pax @ ~${RATES.train_per_person_avg} EUR`;
+  } else if (params.transport_pref === 'ferry') {
+    transportCostTotal = people * 80; // Estimated ferry cost
+    transportNote = `Ferry for ${people} pax @ ~80 EUR`;
+  } else if (params.transport_pref === 'private_car') {
+    // Approx 0.30 EUR/km for fuel/wear
+    transportCostTotal = distance_km * 0.30 * 2; // Round trip
+    transportNote = `Private Car ~${distance_km.toFixed(0)} km (round-trip) @ 0.30 EUR/km`;
   } else {
+    // Bus (default)
     const buses = Math.max(1, Math.ceil(people / RATES.bus_capacity));
     // Round trip + daily local usage (approx 50km/day)
     const totalDist = (distance_km * 2) + (days * 50);
@@ -484,8 +494,8 @@ function computeReliability(sources: any[]) {
   if (!sources || !sources.length) return 42;
   let score = 40;
   sources.forEach(s => {
-    if (s.source === 'google-maps') score += 20; // High confidence for Grounded data
-    if (s.source === 'opentripmap') score += 15; // Reliable secondary source
+    if (s.source === 'google-maps') score += 20; 
+    if (s.source === 'opentripmap') score += 15;
     if (s.source === 'ors') score += 12;
     if (s.source === 'wikidata') score += 10;
     if (s.source === 'geonames') score += 6;
@@ -513,28 +523,37 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
     originGeo = { lat: IDSS_COORDS.lat, lng: IDSS_COORDS.lng, name: 'IDSS Sarajevo', source: 'default', url: null };
   }
 
-  // 3. Candidates (Destination Search)
+  // 3. Candidates (Destinations)
+  // If specific destinations provided, we create a single "Complex Route" candidate.
+  // If regional, we find 3 distinct single-destination candidates.
+  
+  let complexRouteCandidate: { stops: GeoLocation[] } | null = null;
   let candidates: { city: string; country?: string; lat?: number; lng?: number }[] = [];
-  const destInput = formData.destination ? formData.destination.trim() : '';
 
-  if (destInput) {
-    // User provided a destination
-    const ge = await geocodeGeoNames(destInput) || await geocodeORS(destInput);
-    if (ge) {
-      candidates.push({ city: ge.name, lat: ge.lat, lng: ge.lng });
+  const validDestinations = formData.destinations.filter(d => d.trim().length > 0);
+
+  if (validDestinations.length > 0) {
+    // Specific Route mode
+    const resolvedStops: GeoLocation[] = [];
+    for (const dest of validDestinations) {
+        const ge = await geocodeGeoNames(dest) || await geocodeORS(dest);
+        if (ge) {
+            resolvedStops.push(ge);
+        }
+    }
+    if (resolvedStops.length > 0) {
+        complexRouteCandidate = { stops: resolvedStops };
     }
   } else {
-    // Suggest destinations
+    // Suggest destinations (Regional Mode)
     // Attempt Gemini First
     if (!forceTemplates && typeof process !== 'undefined' && process.env && process.env.API_KEY) {
       const prompt = `Suggest 3 distinct and best cities/regions for a ${formData.trip_type} field trip for grade ${formData.grade_level} students. Focus: ${formData.focus}. Scope: ${formData.scope}. Origin: ${originGeo.name}.`;
       const geminiSuggs = await getGeminiSuggestions(prompt, originGeo.lat, originGeo.lng);
       
       for (const s of geminiSuggs.slice(0, 4)) {
-         // Resolve coordinates for Gemini suggestions
          const ge = await geocodeGeoNames(s.label) || await geocodeORS(s.label);
          if (ge) {
-           // Avoid duplicates
            if (!candidates.some(c => c.city === ge.name)) {
              candidates.push({ city: ge.name, lat: ge.lat, lng: ge.lng });
            }
@@ -542,213 +561,231 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
       }
     }
 
-    // Fallback to hardcoded suggestions if AI returned nothing or API Key missing
     if (candidates.length === 0) {
       Object.keys(SUGGESTED_CITIES).forEach(c => {
         SUGGESTED_CITIES[c].forEach(city => candidates.push({ city, country: c }));
       });
-      // If no candidates yet (e.g. filtered out?), take slice
       if (candidates.length > 12) candidates = candidates.slice(0, 12);
     }
   }
 
-  // 4. Enrich (Find POIs)
-  const enriched = [];
-  for (const c of candidates) {
-    let ge: GeoLocation | null = null;
-    if (c.lat && c.lng) {
-      ge = { lat: c.lat, lng: c.lng, name: c.city, source: 'input', url: null };
-    } else {
-      ge = await geocodeGeoNames(c.city + (c.country ? ', ' + c.country : '')) || await geocodeORS(c.city);
-    }
-
-    if (!ge) continue;
-
-    let pois: Poi[] = [];
-    
-    // 4a. Try Gemini Maps Grounding for POIs
-    if (!forceTemplates && typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-       const prompt = `Find 3 best educational points of interest in ${c.city} for grade ${formData.grade_level} students. Focus: ${formData.focus}.`;
-       const geminiPois = await getGeminiSuggestions(prompt, ge.lat, ge.lng);
-       
-       for (const gp of geminiPois) {
-         // Resolve coords for POI. Append city name to ensure correct location.
-         const searchQuery = `${gp.label}, ${c.city}`;
-         const pGeo = await geocodeORS(searchQuery) || await geocodeGeoNames(searchQuery) || await geocodeORS(gp.label);
-         
-         if (pGeo) {
-           if (!pois.some(p => p.label === gp.label)) {
-             pois.push({ 
-               ...gp, 
-               lat: pGeo.lat, 
-               lng: pGeo.lng, 
-               // Keep original Google Maps URL if available
-               url: gp.url || pGeo.url
-             });
-           }
-         }
-       }
-    }
-
-    // 4b. Supplement with OpenTripMap (High Quality)
-    if (!forceTemplates) {
-      const otmPois = await fetchOpenTripMapPOIs(ge.lat, ge.lng, 8000);
-      otmPois.forEach(o => {
-        if (!pois.some(p => p.label === o.label)) pois.push(o);
-      });
-    }
-
-    // 4c. Fallback with Wikidata/ORS
-    if (pois.length < 2 && !forceTemplates) {
-      const wikiPois = await wikidataPOIs(ge.lat, ge.lng, 18, formData.focus);
-      wikiPois.forEach(w => {
-        if (!pois.some(p => p.label === w.label)) pois.push(w);
-      });
-
-      if (pois.length < 2) {
-        const orsPois = await orsPOIsAround(ge.lng, ge.lat, 7000);
-        orsPois.forEach(o => {
-          if (!pois.some(p => p.label === o.label)) pois.push(o);
-        });
-      }
-    }
-
-    enriched.push({ city: ge.name, lat: ge.lat, lng: ge.lng, pois: pois.slice(0, 10) });
-    
-    // If a specific destination was input, stop after processing it.
-    if (destInput && enriched.length >= 1) break; 
-  }
-
-  // 5. Select 3 Plans
-  const chosen = [];
-  if (enriched.length >= 3) {
-    chosen.push(enriched[0]);
-    chosen.push(enriched[Math.floor(enriched.length / 2)]);
-    chosen.push(enriched[enriched.length - 1]);
-  } else if (enriched.length > 0) {
-    // Fill with available
-    for (const e of enriched) chosen.push(e);
-    // Pad if needed
-    while (chosen.length < 3) chosen.push(enriched[0]); 
-  } else {
-    // Ultimate Fallback
-    chosen.push({ city: 'Sarajevo, BiH', lat: 43.8563, lng: 18.4131, pois: [] });
-    chosen.push({ city: 'Mostar, BiH', lat: 43.3438, lng: 17.8078, pois: [] });
-    chosen.push({ city: 'Tuzla, BiH', lat: 44.5375, lng: 18.6735, pois: [] });
-  }
-
   // 6. Build Plans
+  // If complexRouteCandidate exists, we generate 3 plans (Budget, Balanced, Premium) for the SAME route.
+  // If not, we generate 3 plans for DIFFERENT destinations (from candidates).
+
   const tiers = ['budget', 'balanced', 'premium'] as const;
   const plansOut: TripPlan[] = [];
 
-  for (let i = 0; i < 3; i++) {
-    const tier = tiers[i];
-    const cand = chosen[i];
-    const title = `${cand.city} — ${tier.charAt(0).toUpperCase() + tier.slice(1)}`;
-    
-    // Route
-    let routeInfo = await orsRouteDistance(originGeo.lng, originGeo.lat, cand.lng, cand.lat);
-    if (!routeInfo || !routeInfo.distance_m) {
-      const meters = haversineDistance(originGeo.lat, originGeo.lng, cand.lat, cand.lng);
-      routeInfo = { 
-        distance_m: meters, 
-        duration_s: (meters / 50000) * 3600, 
-        polyline: [[originGeo.lat, originGeo.lng], [cand.lat, cand.lng]] 
-      };
-    }
-
-    const distance_km = (routeInfo.distance_m || 0) / 1000;
-    const poiA = cand.pois[0] || { label: 'Local Cultural Site', lat: cand.lat, lng: cand.lng, url: null, source: 'template' };
-    const poiB = cand.pois[1] || null;
-
-    const cost = estimateCosts(formData, distance_km, Math.max(1, days), tier);
-
-    // Generate Detailed Itinerary with Gemini
-    let itinerary: ItineraryDay[] = [];
-    let poiDescriptions: Map<string, string> = new Map();
-
-    // Attempt to use AI to generate a rich, detailed itinerary and descriptions
-    if (!forceTemplates) {
-      const generated = await generateGeminiItinerary(
-        cand.city,
-        days,
-        formData.grade_level,
-        formData.focus,
-        tier,
-        originGeo.name,
-        cand.pois.map(p => ({ label: p.label, url: p.url }))
-      );
-      
-      if (generated.itinerary.length > 0) {
-        itinerary = generated.itinerary;
-      }
-      if (generated.poi_descriptions.length > 0) {
-        generated.poi_descriptions.forEach(d => poiDescriptions.set(d.name, d.description));
-      }
-    }
-
-    // Fallback static itinerary if AI failed or templates requested
-    if (itinerary.length === 0) {
-      itinerary.push({ day: 1, activity: `Travel from ${originGeo.name} to ${cand.city} (~${distance_km.toFixed(1)} km). Check-in & Orientation.` });
-      if (days >= 2) itinerary.push({ day: 2, activity: `Visit: ${poiA.label} — Guided educational tour (Focus: ${formData.focus}).` });
-      if (days >= 3 && poiB) itinerary.push({ day: 3, activity: `Visit: ${poiB.label} — Workshop / Hands-on activity.` });
-      for (let d = itinerary.length + 1; d <= days; d++) itinerary.push({ day: d, activity: 'Reflection, group activities, free time.' });
-    }
-
-    const sources: SourceLink[] = [];
-    // Add verified POIs to sources list
-    cand.pois.forEach(p => {
-      // Attempt to find description by exact match or fuzzy check
-      let desc = poiDescriptions.get(p.label);
-      // Fallback: look for partial match in keys
-      if (!desc) {
-          for (const [key, val] of poiDescriptions.entries()) {
-            if (key.includes(p.label) || p.label.includes(key)) {
-              desc = val;
-              break;
-            }
+  // Determine what we are iterating over
+  // Case A: Multi-stop specific route -> 3 tiers for the same route
+  // Case B: Suggestions -> 3 different locations, mixed tiers (or same tier?) -> Let's do 3 different locations with 'Balanced' tier or vary them.
+  // Actually, standard logic was 3 different locations with Budget/Balanced/Premium.
+  
+  if (complexRouteCandidate) {
+      // Generate 3 tiers for the one complex route
+      for (const tier of tiers) {
+          const stops = complexRouteCandidate.stops;
+          const destinationTitle = stops.map(s => s.name).join(' -> ');
+          const title = `${destinationTitle} — ${tier.charAt(0).toUpperCase() + tier.slice(1)}`;
+          
+          // Calculate Route (Multi-stop)
+          const coords: [number, number][] = [[originGeo.lng, originGeo.lat]];
+          stops.forEach(s => coords.push([s.lng, s.lat]));
+          
+          let routeInfo = await orsRouteDistance(coords);
+          
+          // Fallback if ORS fails (simple haversine sum)
+          if (!routeInfo || !routeInfo.distance_m) {
+              let totalMeters = 0;
+              let poly: [number, number][] = [[originGeo.lat, originGeo.lng]];
+              let prev = originGeo;
+              for (const s of stops) {
+                  totalMeters += haversineDistance(prev.lat, prev.lng, s.lat, s.lng);
+                  poly.push([s.lat, s.lng]);
+                  prev = s;
+              }
+              routeInfo = {
+                  distance_m: totalMeters,
+                  duration_s: (totalMeters / 50000) * 3600,
+                  polyline: poly
+              };
           }
+
+          const distance_km = (routeInfo.distance_m || 0) / 1000;
+          const cost = estimateCosts(formData, distance_km, Math.max(1, days), tier);
+
+          // Gather POIs for ALL stops
+          let allPois: Poi[] = [];
+          if (!forceTemplates) {
+              for (const stop of stops) {
+                  const otmPois = await fetchOpenTripMapPOIs(stop.lat, stop.lng, 5000); // 5km radius per stop
+                  allPois = [...allPois, ...otmPois];
+                  // If low, try wikidata
+                  if (otmPois.length < 2) {
+                      const wiki = await wikidataPOIs(stop.lat, stop.lng, 10, formData.focus);
+                      allPois = [...allPois, ...wiki];
+                  }
+              }
+          }
+
+          // Generate Itinerary
+          let itinerary: ItineraryDay[] = [];
+          let poiDescriptions: Map<string, string> = new Map();
+
+          if (!forceTemplates) {
+              const generated = await generateGeminiItinerary(
+                  stops.map(s => s.name),
+                  days,
+                  formData.grade_level,
+                  formData.focus,
+                  tier,
+                  originGeo.name,
+                  allPois.map(p => ({ label: p.label, url: p.url }))
+              );
+              if (generated.itinerary.length > 0) itinerary = generated.itinerary;
+              generated.poi_descriptions.forEach(d => poiDescriptions.set(d.name, d.description));
+          }
+
+          // Build Sources
+          const sources: SourceLink[] = [];
+          allPois.slice(0, 15).forEach(p => {
+              let desc = poiDescriptions.get(p.label);
+              if (!desc) { // Fuzzy match fallback
+                  for (const [key, val] of poiDescriptions.entries()) {
+                      if (key.includes(p.label) || p.label.includes(key)) {
+                          desc = val; break;
+                      }
+                  }
+              }
+              if (p.url || desc) {
+                  sources.push({ url: p.url, title: p.label, source: p.source, verified: !!p.url, description: desc });
+              }
+          });
+          sources.push({ url: originGeo.url, title: originGeo.name, source: originGeo.source, verified: !!originGeo.url, description: 'Departure' });
+          const uniqueSources = sources.filter((s, index, self) => index === self.findIndex((t) => (t.url === s.url && t.title === s.title)));
+
+          plansOut.push({
+              title,
+              reliability: computeReliability(uniqueSources),
+              destination: destinationTitle,
+              number_of_days: days,
+              itinerary: itinerary.length ? itinerary : [{ day: 1, activity: 'Itinerary generation failed.' }],
+              estimated_cost_per_student: `${cost.breakdown.per_student} EUR`,
+              cost_breakdown: cost.breakdown,
+              distance_km: safe(distance_km),
+              travel_time_h: safe((routeInfo.duration_s || 0) / 3600),
+              accompanying_teachers: formData.teachers,
+              why: `Multi-stop route fitting focus: ${formData.focus}.`,
+              sources: uniqueSources.slice(0, 8),
+              polyline: routeInfo.polyline
+          });
       }
-      
-      // Add to sources if it has URL OR if we have a description generated by AI
-      if (p.url || desc) {
-        sources.push({ 
-          url: p.url, 
-          title: p.label, 
-          source: p.source, 
-          verified: !!p.url,
-          description: desc
-        });
+
+  } else {
+      // Original logic: 3 different destinations (Regional Suggestions)
+      // Enrich Candidates first
+      const enriched = [];
+      for (const c of candidates) {
+          let ge: GeoLocation | null = null;
+          if (c.lat && c.lng) {
+              ge = { lat: c.lat, lng: c.lng, name: c.city, source: 'input', url: null };
+          } else {
+              ge = await geocodeGeoNames(c.city + (c.country ? ', ' + c.country : '')) || await geocodeORS(c.city);
+          }
+          if (!ge) continue;
+
+          // Fetch POIs for this single city
+          let pois: Poi[] = [];
+          if (!forceTemplates) {
+              // Try OTM first
+              const otm = await fetchOpenTripMapPOIs(ge.lat, ge.lng, 8000);
+              pois = [...otm];
+              if (pois.length < 5) {
+                  const wiki = await wikidataPOIs(ge.lat, ge.lng, 15, formData.focus);
+                  wiki.forEach(w => { if (!pois.some(p => p.label === w.label)) pois.push(w); });
+              }
+          }
+          enriched.push({ city: ge.name, lat: ge.lat, lng: ge.lng, pois: pois.slice(0, 10) });
+          if (enriched.length >= 3) break; 
       }
-    });
 
-    if (sources.length === 0 && poiA.url) {
-      sources.push({ url: poiA.url, title: poiA.label, source: poiA.source, verified: true });
-    }
-    
-    // Always add origin
-    sources.push({ url: originGeo.url, title: originGeo.name, source: originGeo.source, verified: !!originGeo.url, description: 'Departure point' });
+      // Ensure we have 3
+      const chosen = [];
+      if (enriched.length >= 3) {
+          chosen.push(enriched[0], enriched[1], enriched[2]);
+      } else {
+          // Fill
+          for (const e of enriched) chosen.push(e);
+          // Fallback if still empty
+          if (chosen.length === 0) {
+             chosen.push({ city: 'Sarajevo, BiH', lat: 43.8563, lng: 18.4131, pois: [] });
+          }
+          // Duplicate last if needed to get 3
+          while(chosen.length < 3) chosen.push(chosen[0]);
+      }
 
-    // De-duplicate sources
-    const uniqueSources = sources.filter((s, index, self) => 
-      index === self.findIndex((t) => (t.url === s.url && t.title === s.title))
-    );
+      for (let i = 0; i < 3; i++) {
+          const tier = tiers[i];
+          const cand = chosen[i];
+          const title = `${cand.city} — ${tier.charAt(0).toUpperCase() + tier.slice(1)}`;
 
-    plansOut.push({
-      title,
-      reliability: computeReliability(uniqueSources),
-      destination: cand.city,
-      number_of_days: days,
-      itinerary,
-      estimated_cost_per_student: `${cost.breakdown.per_student} EUR`,
-      cost_breakdown: cost.breakdown,
-      distance_km: safe(distance_km),
-      travel_time_h: safe((routeInfo.duration_s || 0) / 3600),
-      accompanying_teachers: formData.teachers,
-      why: `Fits focus: ${formData.focus}. Tier: ${tier}.`,
-      sources: uniqueSources.slice(0, 6), // Limit to top 6 sources
-      polyline: routeInfo.polyline
-    });
+          // Route
+          let routeInfo = await orsRouteDistance([[originGeo.lng, originGeo.lat], [cand.lng, cand.lat]]);
+          if (!routeInfo || !routeInfo.distance_m) {
+              const m = haversineDistance(originGeo.lat, originGeo.lng, cand.lat, cand.lng);
+              routeInfo = { distance_m: m, duration_s: (m/50000)*3600, polyline: [[originGeo.lat, originGeo.lng], [cand.lat, cand.lng]] };
+          }
+          
+          const distance_km = (routeInfo.distance_m || 0) / 1000;
+          const cost = estimateCosts(formData, distance_km, Math.max(1, days), tier);
+
+          let itinerary: ItineraryDay[] = [];
+          let poiDescriptions: Map<string, string> = new Map();
+
+          if (!forceTemplates) {
+              const generated = await generateGeminiItinerary(
+                  [cand.city],
+                  days,
+                  formData.grade_level,
+                  formData.focus,
+                  tier,
+                  originGeo.name,
+                  cand.pois.map(p => ({ label: p.label, url: p.url }))
+              );
+              if (generated.itinerary.length > 0) itinerary = generated.itinerary;
+              generated.poi_descriptions.forEach(d => poiDescriptions.set(d.name, d.description));
+          }
+
+          // Build Sources
+          const sources: SourceLink[] = [];
+          cand.pois.forEach(p => {
+              let desc = poiDescriptions.get(p.label);
+              if (!desc) {
+                  for (const [key, val] of poiDescriptions.entries()) {
+                      if (key.includes(p.label) || p.label.includes(key)) { desc = val; break; }
+                  }
+              }
+              if (p.url || desc) sources.push({ url: p.url, title: p.label, source: p.source, verified: !!p.url, description: desc });
+          });
+          sources.push({ url: originGeo.url, title: originGeo.name, source: originGeo.source, verified: !!originGeo.url, description: 'Departure' });
+          const uniqueSources = sources.filter((s, index, self) => index === self.findIndex((t) => (t.url === s.url && t.title === s.title)));
+
+          plansOut.push({
+              title,
+              reliability: computeReliability(uniqueSources),
+              destination: cand.city,
+              number_of_days: days,
+              itinerary: itinerary.length ? itinerary : [{ day: 1, activity: 'Fallback itinerary.' }],
+              estimated_cost_per_student: `${cost.breakdown.per_student} EUR`,
+              cost_breakdown: cost.breakdown,
+              distance_km: safe(distance_km),
+              travel_time_h: safe((routeInfo.duration_s || 0) / 3600),
+              accompanying_teachers: formData.teachers,
+              why: `Fits focus: ${formData.focus}.`,
+              sources: uniqueSources.slice(0, 6),
+              polyline: routeInfo.polyline
+          });
+      }
   }
 
   return { plans: plansOut, origin: originGeo };
