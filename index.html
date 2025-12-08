@@ -10,7 +10,7 @@
       window.process = { env: {} };
     </script>
     
-    <!-- Tailwind CSS via CDN for quick styling (Production Warning is acceptable for MVP) -->
+    <!-- Tailwind CSS via CDN for quick styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     
     <!-- Leaflet CSS -->
@@ -37,23 +37,27 @@
       ::-webkit-scrollbar-thumb:hover {
         background: #94a3b8; 
       }
+      
+      /* Ensure Map Container has size even if Tailwind fails */
+      #leaflet-map-container {
+        min-height: 460px;
+        width: 100%;
+        background-color: #f1f5f9;
+      }
+      
+      /* Fix potential z-index issues with Leaflet tiles */
+      .leaflet-pane {
+        z-index: 10;
+      }
+      .leaflet-top, .leaflet-bottom {
+        z-index: 1000;
+      }
+
       @media print {
         .no-print { display: none !important; }
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
-    "react/": "https://aistudiocdn.com/react@^19.2.1/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
-    "vite": "https://aistudiocdn.com/vite@^7.2.6",
-    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1"
-  }
-}
-</script>
-</head>
+  </head>
   <body class="bg-slate-50 text-slate-900 font-sans">
     <div id="root"></div>
     <!-- Vite entry point -->
