@@ -38,11 +38,11 @@
         background: #94a3b8; 
       }
       
-      /* Ensure Map Container has size even if Tailwind fails */
+      /* Ensure Map Container has explicit size to fix visibility issues on Vercel */
       #leaflet-map-container {
         min-height: 460px;
         width: 100%;
-        background-color: #f1f5f9;
+        background-color: #f1f5f9; /* Light slate background */
       }
       
       /* Fix potential z-index issues with Leaflet tiles */
