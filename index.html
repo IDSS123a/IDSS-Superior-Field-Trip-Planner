@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IDSS — Superior Field Trip Planner</title>
+    <!-- Define process.env to prevent crashes in libraries using it -->
+    <script>
+      window.process = { env: {} };
+    </script>
     <!-- Tailwind CSS via CDN for quick styling (Production Warning is acceptable for MVP) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Leaflet CSS -->

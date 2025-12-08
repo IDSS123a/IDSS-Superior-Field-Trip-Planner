@@ -9,11 +9,11 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // Vital for using process.env in browser
+      // Explicitly replace these variables with their string values during build
       'process.env.API_KEY': JSON.stringify(env.VITE_API_KEY || env.API_KEY),
       'process.env.VITE_GEMINI_API_KEYS': JSON.stringify(env.VITE_GEMINI_API_KEYS),
-      // Polyfill for other process.env checks to prevent crashes
-      'process.env': {}
+      // DO NOT add 'process.env': {} here, as it overrides specific keys above.
+      // Instead, we handle window.process in index.html for general compatibility.
     },
   };
 });
