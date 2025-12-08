@@ -37,6 +37,11 @@ const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPl
 
     const map = mapRef.current;
     
+    // Resize map when container size changes or loading finishes
+    setTimeout(() => {
+       map.invalidateSize();
+    }, 100);
+
     // Handle arbitrary focused location
     if (focusedLocation) {
         map.setView([focusedLocation.lat, focusedLocation.lng], 15, { animate: true });
@@ -141,10 +146,7 @@ const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPl
           }
         });
         
-        // Destination Marker (draw markers for all points in polyline if it's a multi-stop, otherwise just last)
-        // Simplification: Draw last point as main destination marker. 
-        // For complex routes, maybe we should draw intermediate points? 
-        // Let's stick to the last point for simplicity or draw key stops if we had them explicitly.
+        // Destination Marker (simplification: draw last point)
         const last = plan.polyline[plan.polyline.length - 1];
         if (last) {
           const markerSize = isFocused ? 16 : 12;
@@ -191,14 +193,19 @@ const MapView: React.FC<MapViewProps> = ({ origin, plans, focusedPlanIndex, onPl
 
   }, [origin, plans, focusedPlanIndex, onPlanSelect, focusedLocation]);
 
+  // Inline styles to force height and background, overriding potential Tailwind issues
   return (
-    <div className="relative w-full h-full min-h-[460px] rounded-xl border border-slate-200 z-0 bg-slate-50">
+    <div 
+      className="relative w-full rounded-xl border border-slate-200 z-0 overflow-hidden" 
+      style={{ height: '460px', backgroundColor: '#f8fafc', minHeight: '460px' }}
+    >
       <div 
         id={mapContainerId} 
-        className="w-full h-full rounded-xl"
+        className="w-full h-full"
+        style={{ width: '100%', height: '100%' }}
       />
       {isLoading && (
-        <div className="absolute inset-0 z-[2000] bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center rounded-xl text-slate-600 font-bold transition-all duration-300">
+        <div className="absolute inset-0 z-[2000] bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center text-slate-600 font-bold transition-all duration-300">
           <svg className="animate-spin h-10 w-10 text-blue-600 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
