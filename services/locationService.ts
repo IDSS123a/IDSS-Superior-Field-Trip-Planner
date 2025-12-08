@@ -8,19 +8,14 @@ import { TripFormState, PlannerResult, TripPlan, GeoLocation, Poi, CostBreakdown
 
 // Helper to get API Key securely with rotation
 const getGeminiApiKey = (): string | undefined => {
-  // 1. Try to get the list of keys from environment variables
-  // VITE_GEMINI_API_KEYS should be a comma-separated string of keys in Vercel
   const keysString = process.env.VITE_GEMINI_API_KEYS || process.env.API_KEY;
 
   if (!keysString) return undefined;
 
-  // Split by comma and clean up whitespace
   const keys = keysString.split(',').map(k => k.trim()).filter(k => k.length > 0);
 
   if (keys.length === 0) return undefined;
 
-  // 2. Randomly select one key from the available list
-  // This simple rotation strategy distributes load effectively across multiple free-tier accounts.
   const randomIndex = Math.floor(Math.random() * keys.length);
   return keys[randomIndex];
 };
@@ -29,7 +24,6 @@ export function normalizeDate(input: string): string | null {
   if (!input) return null;
   let s = String(input).trim();
   
-  // Handle ISO YYYY-MM-DD from date picker
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
       const [y, m, d] = s.split('-');
       return `${d}.${m}.${y}`;
@@ -91,7 +85,6 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 
 function cleanJsonString(str: string): string {
   if (!str) return '{}';
-  // Remove markdown code blocks if present (```json ... ```)
   return str.replace(/```json/g, '').replace(/```/g, '').trim();
 }
 
@@ -193,6 +186,13 @@ async function fetchOpenTripMapPOIs(lat: number, lng: number, radius_m = 10000):
     const res = await fetch(url);
     if (!res.ok) throw new Error('OTM error ' + res.status);
     const data = await res.json();
+    
+    // FIX: Check if data is an array before mapping.
+    // If rate limit exceeded or error, API might return an object with error message.
+    if (!Array.isArray(data)) {
+        console.warn('OpenTripMap returned non-array:', data);
+        return [];
+    }
     
     return data.map((item: any) => ({
       label: item.name,
@@ -553,7 +553,6 @@ function computeReliability(sources: any[]) {
 }
 
 export async function buildThreePlans(formData: TripFormState, forceTemplates = false): Promise<PlannerResult> {
-  // 1. Validate
   const dep = parseDateNormalized(formData.dep_date);
   const ret = parseDateNormalized(formData.ret_date);
   if (!dep || !ret) throw new Error("Invalid dates.");
@@ -561,7 +560,6 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
   const days = daysInclusive(dep, ret);
   if (formData.trip_type.toLowerCase().includes('multi') && days < 2) throw new Error("Multi-day trip must be at least 2 days.");
 
-  // 2. Geocode Origin
   let originGeo: GeoLocation | null = null;
   if (formData.origin && formData.origin.trim() !== '') {
     originGeo = await geocodeGeoNames(formData.origin) || await geocodeORS(formData.origin);
@@ -570,14 +568,12 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
     originGeo = { lat: IDSS_COORDS.lat, lng: IDSS_COORDS.lng, name: 'IDSS Sarajevo', source: 'default', url: null };
   }
 
-  // 3. Candidates (Destinations)
   let complexRouteCandidate: { stops: GeoLocation[] } | null = null;
   let candidates: { city: string; country?: string; lat?: number; lng?: number }[] = [];
 
   const validDestinations = formData.destinations.filter(d => d.trim().length > 0);
 
   if (validDestinations.length > 0) {
-    // Specific Route mode
     const resolvedStops: GeoLocation[] = [];
     for (const dest of validDestinations) {
         const ge = await geocodeGeoNames(dest) || await geocodeORS(dest);
@@ -590,7 +586,6 @@ export async function buildThreePlans(formData: TripFormState, forceTemplates = 
     }
   } else {
     // Suggest destinations
-    // Only attempt Gemini if API Key is available
     const apiKey = getGeminiApiKey();
     if (!forceTemplates && apiKey) {
       const prompt = `Suggest 3 distinct and best cities/regions for a ${formData.trip_type} field trip for grade ${formData.grade_level} students. Focus: ${formData.focus}. Scope: ${formData.scope}. Origin: ${originGeo.name}.`;
