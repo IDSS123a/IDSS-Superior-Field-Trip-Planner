@@ -4,18 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IDSS — Superior Field Trip Planner</title>
+    
     <!-- Define process.env to prevent crashes in libraries using it -->
     <script>
       window.process = { env: {} };
     </script>
+    
     <!-- Tailwind CSS via CDN for quick styling (Production Warning is acceptable for MVP) -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    
     <!-- html2pdf for PDF export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js" crossorigin="anonymous"></script>
+    
     <style>
       /* Custom scrollbar for a cleaner look */
       ::-webkit-scrollbar {
@@ -35,21 +41,10 @@
         .no-print { display: none !important; }
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
-    "react/": "https://aistudiocdn.com/react@^19.2.1/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
-    "vite": "https://aistudiocdn.com/vite@^7.2.6",
-    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1"
-  }
-}
-</script>
-</head>
+  </head>
   <body class="bg-slate-50 text-slate-900 font-sans">
     <div id="root"></div>
+    <!-- Vite entry point -->
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>
